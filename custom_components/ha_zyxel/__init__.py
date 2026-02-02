@@ -43,7 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def async_update_data():
         """Fetch data from the device."""
         try:
-            return await asyncio.wait_for(api.async_get_data(), timeout=30.0)
+            return await asyncio.wait_for(api.async_get_data(), timeout=50.0)
         except asyncio.TimeoutError as err:
             raise UpdateFailed("Device data fetch timed out") from err
         except Exception as err:
