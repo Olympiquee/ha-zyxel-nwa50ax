@@ -240,6 +240,10 @@ class ZyxelSSHAPI:
                 data["network"]["port"] = self._parse_port_status(port_output)
             
             _LOGGER.info("Successfully fetched all data from NWA50AX")
+            _LOGGER.debug("Data summary: %d clients, CPU: %s%%, Memory: %s%%", 
+                         len(data.get("clients", [])),
+                         data.get("status", {}).get("cpu", {}).get("current", "N/A"),
+                         data.get("status", {}).get("memory", "N/A"))
                 
         except Exception as err:
             _LOGGER.error("Error fetching device data: %s", err)
