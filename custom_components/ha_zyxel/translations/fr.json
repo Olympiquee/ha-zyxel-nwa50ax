@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configuration du périphérique Zyxel",
+        "description": "Configurez votre point d'accès Zyxel NWA50AX",
+        "data": {
+          "host": "Adresse IP ou nom d'hôte",
+          "username": "Nom d'utilisateur",
+          "password": "Mot de passe"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible de se connecter au périphérique. Vérifiez l'adresse IP, le nom d'utilisateur et le mot de passe.",
+      "unknown": "Erreur inattendue"
+    },
+    "abort": {
+      "already_configured": "Ce périphérique est déjà configuré"
+    }
+  }
+}
