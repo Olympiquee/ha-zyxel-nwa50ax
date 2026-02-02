@@ -4,21 +4,16 @@ import asyncio
 import re
 import time
 from typing import Any, Optional
-from datetime import datetime
 
 _LOGGER = logging.getLogger(__name__)
 
-# Essayez d'importer asyncssh, sinon fallback sur paramiko
+# Importer paramiko uniquement (plus stable avec NWA50AX)
 try:
-    import asyncssh
-    HAS_ASYNCSSH = True
+    import paramiko
+    HAS_PARAMIKO = True
 except ImportError:
-    HAS_ASYNCSSH = False
-    try:
-        import paramiko
-        HAS_PARAMIKO = True
-    except ImportError:
-        HAS_PARAMIKO = False
+    HAS_PARAMIKO = False
+    _LOGGER.error("paramiko not installed. Please install: pip install paramiko")
 
 
 class ZyxelSSHAPI:
@@ -30,102 +25,29 @@ class ZyxelSSHAPI:
         self.username = username
         self.password = password
         self.port = port
-        self._conn = None
         
-        if not HAS_ASYNCSSH and not HAS_PARAMIKO:
+        if not HAS_PARAMIKO:
             raise ImportError(
-                "Ni asyncssh ni paramiko n'est installé. "
-                "Installez l'un d'eux : pip install asyncssh ou pip install paramiko"
+                "paramiko is not installed. "
+                "Install it with: pip install paramiko"
             )
 
     async def async_connect(self) -> bool:
-        """Connect to the device via SSH."""
+        """Test SSH connection to the device."""
         try:
-            if HAS_ASYNCSSH:
-                # Utiliser asyncssh (préféré - asynchrone)
-                self._conn = await asyncio.wait_for(
-                    asyncssh.connect(
-                        self.host,
-                        port=self.port,
-                        username=self.username,
-                        password=self.password,
-                        known_hosts=None,  # Accepter tous les hosts
-                    ),
-                    timeout=10.0
-                )
-                _LOGGER.info("Successfully connected via SSH (asyncssh)")
-            else:
-                # Fallback sur paramiko (synchrone, moins optimal)
-                _LOGGER.info("Using paramiko (sync mode)")
-                
-            return True
-            
+            # Test simple de connexion
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, self._test_connection
+            )
+            if result:
+                _LOGGER.info("Successfully tested SSH connection to %s", self.host)
+            return result
         except Exception as err:
-            _LOGGER.error("SSH connection failed: %s", err)
+            _LOGGER.error("SSH connection test failed: %s", err)
             return False
 
-    async def async_disconnect(self) -> None:
-        """Disconnect from the device."""
-        if self._conn and HAS_ASYNCSSH:
-            self._conn.close()
-            await self._conn.wait_closed()
-            self._conn = None
-
-    async def async_execute_command(self, command: str) -> Optional[str]:
-        """Execute a command on the device."""
-        try:
-            if HAS_ASYNCSSH and self._conn:
-                # Mode asynchrone avec channel interactif pour éviter les timeouts
-                return await self._execute_interactive_asyncssh(command)
-            elif HAS_PARAMIKO:
-                # Mode synchrone
-                return await asyncio.get_event_loop().run_in_executor(
-                    None, self._execute_command_sync, command
-                )
-            else:
-                _LOGGER.error("No SSH library available")
-                return None
-                
-        except Exception as err:
-            _LOGGER.error("Error executing command '%s': %s", command, err)
-            return None
-
-    async def _execute_interactive_asyncssh(self, command: str) -> Optional[str]:
-        """Execute command using interactive channel (fixes timeout issues)."""
-        try:
-            # Créer un channel interactif
-            process = await self._conn.create_process()
-            
-            # Envoyer la commande
-            process.stdin.write(command + '\n')
-            await process.stdin.drain()
-            
-            # Lire la sortie avec timeout
-            output = ""
-            try:
-                # Lire avec timeout de 10 secondes
-                output = await asyncio.wait_for(
-                    process.stdout.read(),
-                    timeout=10.0
-                )
-            except asyncio.TimeoutError:
-                # Si timeout, récupérer ce qu'on a déjà
-                _LOGGER.debug("Command '%s' timed out, using partial output", command)
-            
-            # Fermer proprement
-            process.stdin.write('exit\n')
-            await process.stdin.drain()
-            process.close()
-            await process.wait_closed()
-            
-            return output
-            
-        except Exception as err:
-            _LOGGER.error("Interactive command failed: %s", err)
-            return None
-
-    def _execute_command_sync(self, command: str) -> Optional[str]:
-        """Execute command synchronously with paramiko using shell."""
+    def _test_connection(self) -> bool:
+        """Test SSH connection synchronously."""
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         
@@ -139,52 +61,122 @@ class ZyxelSSHAPI:
                 look_for_keys=False,
                 allow_agent=False
             )
+            ssh.close()
+            return True
+        except Exception as err:
+            _LOGGER.error("Connection test failed: %s", err)
+            return False
+
+    async def async_disconnect(self) -> None:
+        """Disconnect - not needed with paramiko (connections are per-command)."""
+        pass
+
+    async def async_execute_command(self, command: str) -> Optional[str]:
+        """Execute a command on the device."""
+        try:
+            return await asyncio.get_event_loop().run_in_executor(
+                None, self._execute_command_sync, command
+            )
+        except Exception as err:
+            _LOGGER.error("Error executing command '%s': %s", command, err)
+            return None
+
+    def _execute_command_sync(self, command: str) -> Optional[str]:
+        """Execute command synchronously with paramiko using interactive shell."""
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        try:
+            # Connexion SSH
+            ssh.connect(
+                self.host,
+                port=self.port,
+                username=self.username,
+                password=self.password,
+                timeout=10,
+                look_for_keys=False,
+                allow_agent=False
+            )
             
-            # Utiliser un shell interactif au lieu d'exec_command
+            # Créer un shell interactif
             shell = ssh.invoke_shell()
-            time.sleep(1)  # Attendre le prompt
+            time.sleep(1)  # Attendre le prompt initial
             
-            # Vider le buffer initial
+            # Vider le buffer initial (prompt, message de bienvenue, etc.)
             if shell.recv_ready():
-                shell.recv(4096)
+                initial_output = shell.recv(8192).decode('utf-8', errors='ignore')
+                _LOGGER.debug("Initial prompt: %s", initial_output[:200])
             
             # Envoyer la commande
             shell.send(command + '\n')
-            time.sleep(2)  # Attendre la réponse
+            time.sleep(2)  # Attendre que la commande s'exécute
             
             # Lire la sortie
             output = ""
-            max_attempts = 10
+            max_attempts = 15
             attempts = 0
             
             while attempts < max_attempts:
                 if shell.recv_ready():
-                    chunk = shell.recv(4096).decode('utf-8', errors='ignore')
+                    chunk = shell.recv(8192).decode('utf-8', errors='ignore')
                     output += chunk
-                    time.sleep(0.1)
+                    time.sleep(0.2)  # Petite pause pour laisser le buffer se remplir
                 else:
-                    if output:  # On a reçu quelque chose, on peut sortir
+                    if output and len(output) > 50:  # On a reçu suffisamment de données
                         break
-                    time.sleep(0.5)
+                    time.sleep(0.3)
                     attempts += 1
             
             # Fermer le shell
             shell.send('exit\n')
+            time.sleep(0.5)
             shell.close()
             ssh.close()
             
-            # Nettoyer la sortie (enlever la commande echo et le prompt)
-            lines = output.split('\n')
-            # Enlever la première ligne (echo de la commande) et les prompts
-            clean_lines = [l for l in lines[1:] if not l.strip().startswith('Router')]
+            # Nettoyer la sortie
+            # Enlever l'écho de la commande et les prompts
+            clean_output = self._clean_output(output, command)
             
-            return '\n'.join(clean_lines).strip()
+            _LOGGER.debug("Command '%s' returned %d characters", command, len(clean_output))
+            
+            return clean_output
             
         except Exception as err:
-            _LOGGER.error("Paramiko command failed: %s", err)
+            _LOGGER.error("Paramiko command '%s' failed: %s", command, err)
             if ssh:
-                ssh.close()
+                try:
+                    ssh.close()
+                except:
+                    pass
             return None
+
+    def _clean_output(self, output: str, command: str) -> str:
+        """Clean command output by removing prompts and echoed command."""
+        if not output:
+            return ""
+        
+        lines = output.split('\n')
+        clean_lines = []
+        
+        for line in lines:
+            # Ignorer les lignes qui contiennent des prompts
+            if any(prompt in line for prompt in ['Router(config)#', 'Router#', 'Router>']):
+                continue
+            # Ignorer l'écho de la commande
+            if line.strip() == command.strip():
+                continue
+            # Ignorer les lignes vides au début
+            if not clean_lines and not line.strip():
+                continue
+            
+            clean_lines.append(line)
+        
+        # Enlever les lignes vides à la fin
+        while clean_lines and not clean_lines[-1].strip():
+            clean_lines.pop()
+        
+        result = '\n'.join(clean_lines)
+        return result.strip()
 
     async def async_get_data(self) -> dict[str, Any]:
         """Get all device data using validated commands."""
@@ -198,44 +190,56 @@ class ZyxelSSHAPI:
         
         try:
             # 1. Version et modèle (show version)
+            _LOGGER.debug("Fetching version...")
             version_output = await self.async_execute_command("show version")
             if version_output:
                 data["device_info"] = self._parse_version(version_output)
+            else:
+                _LOGGER.warning("No output from 'show version'")
             
             # 2. Uptime (show system uptime)
+            _LOGGER.debug("Fetching uptime...")
             uptime_output = await self.async_execute_command("show system uptime")
             if uptime_output:
                 data["status"]["uptime"] = self._parse_uptime(uptime_output)
             
             # 3. CPU (show cpu all)
+            _LOGGER.debug("Fetching CPU...")
             cpu_output = await self.async_execute_command("show cpu all")
             if cpu_output:
                 data["status"]["cpu"] = self._parse_cpu(cpu_output)
             
             # 4. Mémoire (show mem status)
+            _LOGGER.debug("Fetching memory...")
             mem_output = await self.async_execute_command("show mem status")
             if mem_output:
                 data["status"]["memory"] = self._parse_memory(mem_output)
             
-            # 5. Clients WiFi (show wireless-hal station info) - LA PLUS IMPORTANTE
+            # 5. Clients WiFi (show wireless-hal station info)
+            _LOGGER.debug("Fetching WiFi clients...")
             clients_output = await self.async_execute_command("show wireless-hal station info")
             if clients_output:
                 data["clients"] = self._parse_clients(clients_output)
             
             # 6. Interfaces (show interface all)
+            _LOGGER.debug("Fetching interfaces...")
             interface_output = await self.async_execute_command("show interface all")
             if interface_output:
                 data["network"] = self._parse_interfaces(interface_output)
             
             # 7. Info WLAN (show wlan all)
+            _LOGGER.debug("Fetching WLAN info...")
             wlan_output = await self.async_execute_command("show wlan all")
             if wlan_output:
                 data["radio"] = self._parse_wlan(wlan_output)
             
             # 8. Port status (show port status)
+            _LOGGER.debug("Fetching port status...")
             port_output = await self.async_execute_command("show port status")
             if port_output:
                 data["network"]["port"] = self._parse_port_status(port_output)
+            
+            _LOGGER.info("Successfully fetched all data from NWA50AX")
                 
         except Exception as err:
             _LOGGER.error("Error fetching device data: %s", err)
@@ -243,13 +247,7 @@ class ZyxelSSHAPI:
         return data
 
     def _parse_version(self, output: str) -> dict[str, Any]:
-        """Parse 'show version' output.
-        
-        Example:
-        model           : NWA50AX
-        firmware version: V7.10(ABYW.3)
-        build date      : 2025-06-29 01:00:28
-        """
+        """Parse 'show version' output."""
         info = {
             "model": "Unknown",
             "firmware": "Unknown",
@@ -271,11 +269,7 @@ class ZyxelSSHAPI:
         return info
 
     def _parse_uptime(self, output: str) -> int:
-        """Parse 'show system uptime' output.
-        
-        Example: system uptime: 1 days 05:34:40
-        Returns: uptime in seconds
-        """
+        """Parse 'show system uptime' output. Returns uptime in seconds."""
         uptime_seconds = 0
         
         # Format: X days HH:MM:SS
@@ -287,7 +281,7 @@ class ZyxelSSHAPI:
             seconds = int(match.group(4))
             uptime_seconds = days * 86400 + hours * 3600 + minutes * 60 + seconds
         else:
-            # Format alternatif: HH:MM:SS (sans jours)
+            # Format alternatif: HH:MM:SS
             match = re.search(r'(\d+):(\d+):(\d+)', output)
             if match:
                 hours = int(match.group(1))
@@ -298,13 +292,7 @@ class ZyxelSSHAPI:
         return uptime_seconds
 
     def _parse_cpu(self, output: str) -> dict[str, Any]:
-        """Parse 'show cpu all' output.
-        
-        Example:
-        CPU core 0 utilization: 5 %
-        CPU core 0 utilization for 1 min: 3 %
-        CPU core 0 utilization for 5 min: 3 %
-        """
+        """Parse 'show cpu all' output."""
         cpu_data = {
             "current": 0,
             "avg_1min": 0,
@@ -312,7 +300,6 @@ class ZyxelSSHAPI:
             "cores": [],
         }
         
-        # Extraire les valeurs de chaque core
         core_pattern = r'CPU core (\d+) utilization:\s*(\d+)\s*%'
         core_1min_pattern = r'CPU core (\d+) utilization for 1 min:\s*(\d+)\s*%'
         core_5min_pattern = r'CPU core (\d+) utilization for 5 min:\s*(\d+)\s*%'
@@ -321,7 +308,6 @@ class ZyxelSSHAPI:
         cores_1min = re.findall(core_1min_pattern, output)
         cores_5min = re.findall(core_5min_pattern, output)
         
-        # Calculer la moyenne de tous les cores
         if cores_current:
             cpu_data["current"] = sum(int(c[1]) for c in cores_current) // len(cores_current)
             cpu_data["cores"] = [int(c[1]) for c in cores_current]
@@ -335,46 +321,21 @@ class ZyxelSSHAPI:
         return cpu_data
 
     def _parse_memory(self, output: str) -> int:
-        """Parse 'show mem status' output.
-        
-        Example: memory usage: 53%
-        Returns: percentage as integer
-        """
+        """Parse 'show mem status' output. Returns percentage."""
         match = re.search(r'memory usage:\s*(\d+)\s*%', output)
         if match:
             return int(match.group(1))
         return 0
 
     def _parse_clients(self, output: str) -> list[dict[str, Any]]:
-        """Parse 'show wireless-hal station info' output.
-        
-        Example:
-        index: 1
-          MAC: a4:e5:7c:a3:38:8a
-          IPv4: 10.0.30.248
-          Slot: 1
-          SSID: 6fer_IoT
-          Security: WPA2-PSK
-          TxRate: 72M
-          RxRate: 54M
-          RSSI: 98
-          RSSI dBm: -51
-          Time: 06:32:31 2026/01/30
-          VapIdx: 3
-          Capability: 802.11b/g/n
-          DOT11 features: N/A
-          Display SSID: 6fer_IoT
-          Band: 2.4GHz
-        """
+        """Parse 'show wireless-hal station info' output."""
         clients = []
         
-        # Découper par "index:"
         client_blocks = re.split(r'index:\s*\d+', output)
         
-        for block in client_blocks[1:]:  # Skip le premier qui est vide
+        for block in client_blocks[1:]:
             client = {}
             
-            # Extraire chaque champ
             mac_match = re.search(r'MAC:\s*([\da-fA-F:]+)', block)
             if mac_match:
                 client["mac"] = mac_match.group(1).upper()
@@ -425,32 +386,24 @@ class ZyxelSSHAPI:
             if time_match:
                 client["connected_since"] = time_match.group(1).strip()
             
-            if client.get("mac"):  # On ajoute seulement si on a au moins le MAC
+            if client.get("mac"):
                 clients.append(client)
         
         return clients
 
     def _parse_interfaces(self, output: str) -> dict[str, Any]:
-        """Parse 'show interface all' output.
-        
-        Example:
-        No. Name            Status              IP Address      Mask            IP Assignment
-        ===============================================================================
-        2   lan             Up                  10.0.20.2       255.255.255.0   DHCP client
-        """
+        """Parse 'show interface all' output."""
         network = {
             "ip_address": "Unknown",
             "netmask": "Unknown",
             "interfaces": [],
         }
         
-        # Chercher l'interface 'lan' principale
         lan_match = re.search(r'lan\s+Up\s+([\d.]+)\s+([\d.]+)', output)
         if lan_match:
             network["ip_address"] = lan_match.group(1)
             network["netmask"] = lan_match.group(2)
         
-        # Lister toutes les interfaces
         interface_lines = re.findall(r'(\d+)\s+(\S+)\s+(Up|Down|n/a)\s+([\d.]+|n/a)', output)
         for iface in interface_lines:
             network["interfaces"].append({
@@ -462,15 +415,7 @@ class ZyxelSSHAPI:
         return network
 
     def _parse_wlan(self, output: str) -> dict[str, Any]:
-        """Parse 'show wlan all' output.
-        
-        Example:
-        slot: slot1
-         Role: ap
-         Band: 2.4G
-         SSID_profile_1: Home
-         Activate: yes
-        """
+        """Parse 'show wlan all' output."""
         radio = {
             "slot1_active": False,
             "slot1_band": "Unknown",
@@ -480,25 +425,21 @@ class ZyxelSSHAPI:
             "slot2_ssids": [],
         }
         
-        # Slot 1 (2.4GHz)
         slot1_match = re.search(r'slot: slot1.*?Activate: (\w+).*?Band: ([\dG.]+)', output, re.DOTALL)
         if slot1_match:
             radio["slot1_active"] = slot1_match.group(1).lower() == "yes"
             radio["slot1_band"] = slot1_match.group(2)
         
-        # SSIDs du slot1
         slot1_block = re.search(r'slot: slot1(.*?)(?:slot: slot2|$)', output, re.DOTALL)
         if slot1_block:
             ssids = re.findall(r'SSID_profile_\d+:\s*(\S+)', slot1_block.group(1))
             radio["slot1_ssids"] = [s for s in ssids if s]
         
-        # Slot 2 (5GHz)
         slot2_match = re.search(r'slot: slot2.*?Activate: (\w+).*?Band: ([\dG.]+)', output, re.DOTALL)
         if slot2_match:
             radio["slot2_active"] = slot2_match.group(1).lower() == "yes"
             radio["slot2_band"] = slot2_match.group(2)
         
-        # SSIDs du slot2
         slot2_block = re.search(r'slot: slot2(.*?)$', output, re.DOTALL)
         if slot2_block:
             ssids = re.findall(r'SSID_profile_\d+:\s*(\S+)', slot2_block.group(1))
@@ -507,12 +448,7 @@ class ZyxelSSHAPI:
         return radio
 
     def _parse_port_status(self, output: str) -> dict[str, Any]:
-        """Parse 'show port status' output.
-        
-        Example:
-        Port Status       TxPkts     RxPkts     TxBcast    RxBcast    Colli.  TxB/s      RxB/s      Up Time      PVID       TxBytes              RxBytes
-        1    1000M/Full   2937780    5799031    3176       139355     0       8616       15312      29:33:11     20         796587774            5569274515
-        """
+        """Parse 'show port status' output."""
         port = {
             "status": "Unknown",
             "speed": "Unknown",
@@ -523,7 +459,6 @@ class ZyxelSSHAPI:
             "uptime": "Unknown",
         }
         
-        # Extraire la ligne de données du port 1
         port_match = re.search(
             r'1\s+(\S+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)\s+(\d+)\s+([\d:]+)\s+\d+\s+(\d+)\s+(\d+)',
             output
@@ -531,13 +466,12 @@ class ZyxelSSHAPI:
         
         if port_match:
             port["status"] = port_match.group(1)
-            port["tx_rate"] = int(port_match.group(2))  # B/s
-            port["rx_rate"] = int(port_match.group(3))  # B/s
+            port["tx_rate"] = int(port_match.group(2))
+            port["rx_rate"] = int(port_match.group(3))
             port["uptime"] = port_match.group(4)
             port["tx_bytes"] = int(port_match.group(5))
             port["rx_bytes"] = int(port_match.group(6))
             
-            # Extraire la vitesse (1000M/Full -> 1000M)
             if "/" in port["status"]:
                 port["speed"] = port["status"].split("/")[0]
         
@@ -546,7 +480,6 @@ class ZyxelSSHAPI:
     async def async_reboot(self) -> bool:
         """Reboot the device."""
         try:
-            # La commande reboot sur Zyxel
             result = await self.async_execute_command("reboot")
             if result is not None:
                 _LOGGER.info("Reboot command sent")
@@ -560,7 +493,6 @@ class ZyxelSSHAPI:
         """Enable or disable Guest SSID schedule."""
         try:
             if enable:
-                # Désactiver le planning (SSID toujours actif)
                 commands = [
                     "configure terminal",
                     "wlan-ssid-profile Guest",
@@ -569,7 +501,6 @@ class ZyxelSSHAPI:
                     "write",
                 ]
             else:
-                # Activer le planning (SSID suit le planning configuré)
                 commands = [
                     "configure terminal",
                     "wlan-ssid-profile Guest",
@@ -580,7 +511,7 @@ class ZyxelSSHAPI:
             
             for cmd in commands:
                 await self.async_execute_command(cmd)
-                await asyncio.sleep(0.5)  # Petite pause entre commandes
+                await asyncio.sleep(0.5)
             
             _LOGGER.info("Guest SSID schedule %s", "disabled (always on)" if enable else "enabled")
             return True
