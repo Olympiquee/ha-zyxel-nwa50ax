@@ -476,13 +476,18 @@ class ZyxelSSHAPI:
                 client["connected_since"] = time_match.group(1).strip()
             
             if client.get("mac"):
-                # Essayer de récupérer le hostname via reverse DNS
+                # Essayer de récupérer le hostname via reverse DNS (avec timeout court)
                 if client.get("ip"):
                     try:
+                        # Timeout de 0.5 seconde pour ne pas ralentir
+                        socket.setdefaulttimeout(0.5)
                         hostname = socket.gethostbyaddr(client["ip"])[0]
                         client["hostname"] = hostname
+                        _LOGGER.debug("Resolved hostname for %s: %s", client["ip"], hostname)
                     except (socket.herror, socket.gaierror, socket.timeout):
                         client["hostname"] = None
+                    finally:
+                        socket.setdefaulttimeout(None)  # Reset timeout
                 
                 clients.append(client)
         
