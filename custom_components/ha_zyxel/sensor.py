@@ -185,6 +185,7 @@ class ZyxelLastSeenSensor(ZyxelBaseSensor):
         # Mettre à jour le timestamp si la mise à jour a réussi
         if self.coordinator.last_update_success:
             from datetime import datetime
+            from homeassistant.util import dt as dt_util
             self._last_success_time = dt_util.now()
         return self._last_success_time
 
