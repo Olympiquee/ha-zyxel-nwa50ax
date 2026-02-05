@@ -1,0 +1,8 @@
+{
+  "name": "Zyxel NWA50AX",
+  "content_in_root": false,
+  "render_readme": true,
+  "domains": ["sensor", "switch", "button"],
+  "homeassistant": "2024.1.0",
+  "iot_class": "Local Polling"
+}
