@@ -185,7 +185,7 @@ class ZyxelLastSeenSensor(ZyxelBaseSensor):
         # Mettre à jour le timestamp si la mise à jour a réussi
         if self.coordinator.last_update_success:
             from datetime import datetime
-            self._last_success_time = datetime.now()
+            self._last_success_time = dt_util.now()
         return self._last_success_time
 
     @property
