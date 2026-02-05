@@ -170,6 +170,11 @@ class ZyxelLastSeenSensor(ZyxelBaseSensor):
     _attr_icon = "mdi:clock-check-outline"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
+    def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator, config_entry)
+        self._last_success_time = None
+
     @property
     def unique_id(self) -> str:
         return f"{self._config_entry.entry_id}_last_seen"
@@ -177,7 +182,11 @@ class ZyxelLastSeenSensor(ZyxelBaseSensor):
     @property
     def native_value(self):
         """Return timestamp of last successful update."""
-        return self.coordinator.last_update_success_time
+        # Mettre à jour le timestamp si la mise à jour a réussi
+        if self.coordinator.last_update_success:
+            from datetime import datetime
+            self._last_success_time = datetime.now()
+        return self._last_success_time
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
