@@ -3,6 +3,7 @@ import logging
 import asyncio
 import re
 import time
+import socket
 from typing import Any, Optional
 
 _LOGGER = logging.getLogger(__name__)
@@ -81,13 +82,21 @@ class ZyxelSSHAPI:
             _LOGGER.error("Error executing command '%s': %s", command, err)
             return None
 
-    def _execute_command_sync(self, command: str) -> Optional[str]:
-        """Execute command synchronously with paramiko using interactive shell."""
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    def _execute_command_sync(self, command: str, keep_connection: bool = False) -> Optional[str]:
+        """Execute command synchronously with paramiko using interactive shell.
+        
+        Args:
+            command: Command to execute
+            keep_connection: If True, reuse existing connection if available
+        """
+        ssh = None
+        shell = None
         
         try:
             # Connexion SSH
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            
             ssh.connect(
                 self.host,
                 port=self.port,
@@ -134,7 +143,6 @@ class ZyxelSSHAPI:
             ssh.close()
             
             # Nettoyer la sortie
-            # Enlever l'écho de la commande et les prompts
             clean_output = self._clean_output(output, command)
             
             _LOGGER.debug("Command '%s' returned %d characters", command, len(clean_output))
@@ -143,12 +151,89 @@ class ZyxelSSHAPI:
             
         except Exception as err:
             _LOGGER.error("Paramiko command '%s' failed: %s", command, err)
+            if shell:
+                try:
+                    shell.close()
+                except:
+                    pass
             if ssh:
                 try:
                     ssh.close()
                 except:
                     pass
             return None
+
+    def _execute_command_batch_sync(self, commands: list[str]) -> bool:
+        """Execute multiple commands in a single SSH session.
+        
+        Args:
+            commands: List of commands to execute sequentially
+            
+        Returns:
+            True if all commands succeeded, False otherwise
+        """
+        ssh = None
+        shell = None
+        
+        try:
+            # Connexion SSH
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            
+            ssh.connect(
+                self.host,
+                port=self.port,
+                username=self.username,
+                password=self.password,
+                timeout=10,
+                look_for_keys=False,
+                allow_agent=False
+            )
+            
+            # Créer un shell interactif
+            shell = ssh.invoke_shell()
+            time.sleep(1)  # Attendre le prompt initial
+            
+            # Vider le buffer initial
+            if shell.recv_ready():
+                shell.recv(8192)
+            
+            # Exécuter toutes les commandes dans la même session
+            for cmd in commands:
+                _LOGGER.debug("Executing batch command: %s", cmd)
+                shell.send(cmd + '\n')
+                time.sleep(0.8)  # Attendre entre les commandes
+                
+                # Lire la sortie pour éviter le remplissage du buffer
+                if shell.recv_ready():
+                    output = shell.recv(8192).decode('utf-8', errors='ignore')
+                    _LOGGER.debug("Command '%s' output: %s", cmd, output[:100])
+            
+            # Attendre un peu plus après la dernière commande (write)
+            time.sleep(1.5)
+            
+            # Fermer proprement
+            shell.send('exit\n')
+            time.sleep(0.5)
+            shell.close()
+            ssh.close()
+            
+            _LOGGER.info("Successfully executed %d commands in batch", len(commands))
+            return True
+            
+        except Exception as err:
+            _LOGGER.error("Batch command execution failed: %s", err)
+            if shell:
+                try:
+                    shell.close()
+                except:
+                    pass
+            if ssh:
+                try:
+                    ssh.close()
+                except:
+                    pass
+            return False
 
     def _clean_output(self, output: str, command: str) -> str:
         """Clean command output by removing prompts and echoed command."""
@@ -391,6 +476,14 @@ class ZyxelSSHAPI:
                 client["connected_since"] = time_match.group(1).strip()
             
             if client.get("mac"):
+                # Essayer de récupérer le hostname via reverse DNS
+                if client.get("ip"):
+                    try:
+                        hostname = socket.gethostbyaddr(client["ip"])[0]
+                        client["hostname"] = hostname
+                    except (socket.herror, socket.gaierror, socket.timeout):
+                        client["hostname"] = None
+                
                 clients.append(client)
         
         return clients
@@ -513,13 +606,53 @@ class ZyxelSSHAPI:
                     "write",
                 ]
             
-            for cmd in commands:
-                await self.async_execute_command(cmd)
-                await asyncio.sleep(0.5)
+            # Exécuter toutes les commandes dans une seule session
+            success = await asyncio.get_event_loop().run_in_executor(
+                None, self._execute_command_batch_sync, commands
+            )
             
-            _LOGGER.info("Guest SSID schedule %s", "disabled (always on)" if enable else "enabled")
-            return True
+            if success:
+                _LOGGER.info("Guest SSID schedule %s", "disabled (always on)" if enable else "enabled")
+            
+            return success
             
         except Exception as err:
             _LOGGER.error("Error toggling guest SSID: %s", err)
+            return False
+
+    async def async_toggle_radio(self, slot: int, enable: bool) -> bool:
+        """Enable or disable radio (slot 1 = 2.4GHz, slot 2 = 5GHz)."""
+        try:
+            # Déterminer le profil radio
+            profile = "default" if slot == 1 else "default2"
+            
+            if enable:
+                commands = [
+                    "configure terminal",
+                    f"wlan-radio-profile {profile}",
+                    "activate",
+                    "exit",
+                    "write",
+                ]
+            else:
+                commands = [
+                    "configure terminal",
+                    f"wlan-radio-profile {profile}",
+                    "no activate",
+                    "exit",
+                    "write",
+                ]
+            
+            # Exécuter toutes les commandes dans une seule session
+            success = await asyncio.get_event_loop().run_in_executor(
+                None, self._execute_command_batch_sync, commands
+            )
+            
+            if success:
+                _LOGGER.info("Radio slot %d (profile %s) %s", slot, profile, "activated" if enable else "deactivated")
+            
+            return success
+            
+        except Exception as err:
+            _LOGGER.error("Error toggling radio slot %d: %s", slot, err)
             return False
