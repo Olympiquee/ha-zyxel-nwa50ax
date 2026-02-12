@@ -8,12 +8,14 @@ CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 CONF_PORT = "port"
 CONF_SCAN_INTERVAL = "scan_interval"
+CONF_AUTO_UPDATE = "auto_update"
 
 # Defaults
 DEFAULT_HOST = "192.168.1.2"
 DEFAULT_USERNAME = "admin"
 DEFAULT_PORT = 22
 DEFAULT_SCAN_INTERVAL = 60  # Plus lent pour SSH (60 secondes)
+DEFAULT_AUTO_UPDATE = True  # Auto-update enabled by default
 
 # Attributes
 ATTR_DEVICE_MODEL = "device_model"
