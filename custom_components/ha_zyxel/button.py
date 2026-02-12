@@ -24,6 +24,7 @@ async def async_setup_entry(
     
     buttons = [
         ZyxelRebootButton(coordinator, api, config_entry),
+        ZyxelUpdateButton(coordinator, api, config_entry),
     ]
     
     async_add_entities(buttons)
@@ -70,3 +71,43 @@ class ZyxelRebootButton(CoordinatorEntity, ButtonEntity):
                 _LOGGER.error("Failed to send reboot command")
         except Exception as err:
             _LOGGER.error("Error rebooting device: %s", err)
+
+
+class ZyxelUpdateButton(CoordinatorEntity, ButtonEntity):
+    """Button to manually update device data."""
+
+    _attr_name = "Update Data"
+    _attr_icon = "mdi:refresh"
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, api, config_entry: ConfigEntry) -> None:
+        """Initialize the button."""
+        super().__init__(coordinator)
+        self._api = api
+        self._config_entry = config_entry
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID."""
+        return f"{self._config_entry.entry_id}_update"
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Return device information."""
+        device_data = self.coordinator.data.get("device_info", {})
+        return {
+            "identifiers": {(DOMAIN, self._config_entry.entry_id)},
+            "name": f"Zyxel {device_data.get('model', 'NWA50AX')}",
+            "manufacturer": "Zyxel",
+            "model": device_data.get("model", "NWA50AX"),
+            "sw_version": device_data.get("firmware", "Unknown"),
+        }
+
+    async def async_press(self) -> None:
+        """Handle the button press - refresh data."""
+        _LOGGER.info("Manually refreshing Zyxel device data")
+        try:
+            await self.coordinator.async_request_refresh()
+            _LOGGER.info("Data refresh completed")
+        except Exception as err:
+            _LOGGER.error("Error refreshing data: %s", err)
