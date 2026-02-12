@@ -7,7 +7,7 @@ from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DEFAULT_HOST, DEFAULT_USERNAME, DEFAULT_PORT, CONF_PORT, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import DEFAULT_HOST, DEFAULT_USERNAME, DEFAULT_PORT, CONF_PORT, CONF_SCAN_INTERVAL, CONF_AUTO_UPDATE, DEFAULT_SCAN_INTERVAL, DEFAULT_AUTO_UPDATE, DOMAIN
 from .zyxel_ssh_api import ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
@@ -18,8 +18,9 @@ DATA_SCHEMA = vol.Schema(
         vol.Optional(CONF_PORT, default=DEFAULT_PORT): int,
         vol.Required(CONF_USERNAME, default=DEFAULT_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
+        vol.Optional(CONF_AUTO_UPDATE, default=DEFAULT_AUTO_UPDATE): bool,
         vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.All(
-            vol.Coerce(int), vol.Range(min=30, max=300)
+            vol.Coerce(int), vol.Range(min=30, max=600)
         ),
     }
 )
