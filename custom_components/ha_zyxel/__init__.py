@@ -14,7 +14,9 @@ from .const import (
     CONF_USERNAME,
     CONF_PORT,
     CONF_SCAN_INTERVAL,
+    CONF_AUTO_UPDATE,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_AUTO_UPDATE,
     DOMAIN,
 )
 from .zyxel_ssh_api import ZyxelSSHAPI
@@ -31,6 +33,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     password = entry.data[CONF_PASSWORD]
     port = entry.data.get(CONF_PORT, 22)
     scan_interval = entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    auto_update = entry.data.get(CONF_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)
 
     api = ZyxelSSHAPI(host, username, password, port)
 
@@ -51,13 +54,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as err:
             raise UpdateFailed(f"Error communicating with device: {err}") from err
 
-    coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        name=DOMAIN,
-        update_method=async_update_data,
-        update_interval=timedelta(seconds=scan_interval),
-    )
+    # Créer le coordinator avec ou sans auto-update
+    if auto_update:
+        coordinator = DataUpdateCoordinator(
+            hass,
+            _LOGGER,
+            name=DOMAIN,
+            update_method=async_update_data,
+            update_interval=timedelta(seconds=scan_interval),
+        )
+    else:
+        # Mode manuel : pas d'update_interval
+        coordinator = DataUpdateCoordinator(
+            hass,
+            _LOGGER,
+            name=DOMAIN,
+            update_method=async_update_data,
+            update_interval=None,  # Désactive les mises à jour automatiques
+        )
 
     await coordinator.async_config_entry_first_refresh()
 
