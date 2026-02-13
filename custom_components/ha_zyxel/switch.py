@@ -152,9 +152,9 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
         try:
             success = await self._api.async_toggle_radio(slot=1, enable=True)
             if success:
-                # Attendre 10s que la radio se stabilise
-                _LOGGER.info("Waiting 10s for radio to stabilize...")
-                await asyncio.sleep(10)
+                # Attendre 60s que la radio se stabilise
+                _LOGGER.info("Waiting 60s for radio to stabilize...")
+                await asyncio.sleep(60)
                 await self.coordinator.async_request_refresh()
                 _LOGGER.info("2.4GHz radio activated successfully")
             else:
@@ -168,9 +168,9 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
         try:
             success = await self._api.async_toggle_radio(slot=1, enable=False)
             if success:
-                # Attendre 10s que la radio se stabilise
-                _LOGGER.info("Waiting 10s for radio to stabilize...")
-                await asyncio.sleep(10)
+                # Attendre 60s que la radio se stabilise
+                _LOGGER.info("Waiting 60s for radio to stabilize...")
+                await asyncio.sleep(60)
                 await self.coordinator.async_request_refresh()
                 _LOGGER.info("2.4GHz radio deactivated successfully")
             else:
@@ -232,9 +232,9 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
         try:
             success = await self._api.async_toggle_radio(slot=2, enable=True)
             if success:
-                # Attendre 10s que la radio se stabilise
-                _LOGGER.info("Waiting 10s for radio to stabilize...")
-                await asyncio.sleep(10)
+                # Attendre 60s que la radio se stabilise
+                _LOGGER.info("Waiting 60s for radio to stabilize...")
+                await asyncio.sleep(60)
                 await self.coordinator.async_request_refresh()
                 _LOGGER.info("5GHz radio activated successfully")
             else:
@@ -248,9 +248,9 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
         try:
             success = await self._api.async_toggle_radio(slot=2, enable=False)
             if success:
-                # Attendre 10s que la radio se stabilise
-                _LOGGER.info("Waiting 10s for radio to stabilize...")
-                await asyncio.sleep(10)
+                # Attendre 60s que la radio se stabilise
+                _LOGGER.info("Waiting 60s for radio to stabilize...")
+                await asyncio.sleep(60)
                 await self.coordinator.async_request_refresh()
                 _LOGGER.info("5GHz radio deactivated successfully")
             else:
