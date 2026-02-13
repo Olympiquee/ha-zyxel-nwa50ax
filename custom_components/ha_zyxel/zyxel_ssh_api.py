@@ -163,7 +163,7 @@ class ZyxelSSHAPI:
                 allow_agent=False
             )
             
-@@ -241,122 +299,152 @@ class ZyxelSSHAPI:
+class ZyxelSSHAPI:
             return ""
         
         lines = output.split('\n')
@@ -316,7 +316,7 @@ class ZyxelSSHAPI:
     def _parse_uptime(self, output: str) -> int:
         """Parse 'show system uptime' output. Returns uptime in seconds."""
         uptime_seconds = 0
-@@ -560,105 +648,152 @@ class ZyxelSSHAPI:
+class ZyxelSSHAPI:
             "rx_rate": 0,
             "uptime": "Unknown",
         }
