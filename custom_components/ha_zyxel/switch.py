@@ -38,7 +38,7 @@ class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
 
     _attr_name = "Guest SSID"
     _attr_icon = "mdi:wifi"
-@@ -100,170 +101,190 @@ class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
+class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
         except Exception as err:
             _LOGGER.error("Error disabling Guest SSID: %s", err)
 
