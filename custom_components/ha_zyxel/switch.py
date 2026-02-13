@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+_radio_locks: dict[str, asyncio.Lock] = {}
 
 
 async def async_setup_entry(
@@ -37,66 +38,7 @@ class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
 
     _attr_name = "Guest SSID"
     _attr_icon = "mdi:wifi"
-    _attr_has_entity_name = True
-
-    def __init__(self, coordinator, api, config_entry: ConfigEntry) -> None:
-        """Initialize the switch."""
-        super().__init__(coordinator)
-        self._api = api
-        self._config_entry = config_entry
-        self._attr_is_on = False
-
-    @property
-    def unique_id(self) -> str:
-        """Return unique ID."""
-        return f"{self._config_entry.entry_id}_guest_ssid"
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information."""
-        device_data = self.coordinator.data.get("device_info", {})
-        return {
-            "identifiers": {(DOMAIN, self._config_entry.entry_id)},
-            "name": f"Zyxel {device_data.get('model', 'NWA50AX')}",
-            "manufacturer": "Zyxel",
-            "model": device_data.get("model", "NWA50AX"),
-            "sw_version": device_data.get("firmware", "Unknown"),
-        }
-
-    @property
-    def is_on(self) -> bool:
-        """Return true if Guest SSID is enabled (schedule disabled)."""
-        # On considère que le SSID est "ON" si le schedule est désactivé
-        # (c'est-à-dire que le SSID est toujours actif)
-        # Note: On ne peut pas vraiment détecter l'état depuis les commandes SSH
-        # donc on garde un état interne qui persiste via l'attribut
-        return self._attr_is_on
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the Guest SSID on (disable schedule = always active)."""
-        _LOGGER.info("Enabling Guest SSID (disabling schedule)")
-        try:
-            success = await self._api.async_toggle_guest_ssid(enable=True)
-            if success:
-                self._attr_is_on = True
-                self.async_write_ha_state()
-                _LOGGER.info("Guest SSID enabled successfully")
-            else:
-                _LOGGER.error("Failed to enable Guest SSID")
-        except Exception as err:
-            _LOGGER.error("Error enabling Guest SSID: %s", err)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the Guest SSID off (enable schedule = follow configured hours)."""
-        _LOGGER.info("Disabling Guest SSID (enabling schedule)")
-        try:
-            success = await self._api.async_toggle_guest_ssid(enable=False)
-            if success:
-                self._attr_is_on = False
-                self.async_write_ha_state()
-                _LOGGER.info("Guest SSID disabled successfully (following schedule)")
-            else:
-                _LOGGER.error("Failed to disable Guest SSID")
+@@ -100,170 +101,190 @@ class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
         except Exception as err:
             _LOGGER.error("Error disabling Guest SSID: %s", err)
 
@@ -122,6 +64,10 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
         self._api = api
         self._config_entry = config_entry
         self._attr_is_on = True  # On suppose qu'elle est active par défaut
+        lock_key = f"{config_entry.entry_id}_radio"
+        if lock_key not in _radio_locks:
+            _radio_locks[lock_key] = asyncio.Lock()
+        self._lock = _radio_locks[lock_key]
 
     @property
     def unique_id(self) -> str:
@@ -148,35 +94,41 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the 2.4GHz radio on."""
+        if self._lock.locked():
+            _LOGGER.warning("A radio toggle is already in progress, please wait")
+            return
+
         _LOGGER.info("Activating 2.4GHz radio")
-        try:
-            success = await self._api.async_toggle_radio(slot=1, enable=True)
-            if success:
-                # Attendre 60s que la radio se stabilise
-                _LOGGER.info("Waiting 60s for radio to stabilize...")
-                await asyncio.sleep(60)
-                await self.coordinator.async_request_refresh()
-                _LOGGER.info("2.4GHz radio activated successfully")
-            else:
-                _LOGGER.error("Failed to activate 2.4GHz radio")
-        except Exception as err:
-            _LOGGER.error("Error activating 2.4GHz radio: %s", err)
+        async with self._lock:
+            try:
+                success = await self._api.async_toggle_radio(slot=1, enable=True)
+                if success:
+                    self.coordinator.data.setdefault("radio", {})["slot1_active"] = True
+                    self.async_write_ha_state()
+                    _LOGGER.info("2.4GHz radio activated successfully")
+                else:
+                    _LOGGER.error("Failed to activate 2.4GHz radio")
+            except Exception as err:
+                _LOGGER.error("Error activating 2.4GHz radio: %s", err)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the 2.4GHz radio off."""
+        if self._lock.locked():
+            _LOGGER.warning("A radio toggle is already in progress, please wait")
+            return
+
         _LOGGER.info("Deactivating 2.4GHz radio")
-        try:
-            success = await self._api.async_toggle_radio(slot=1, enable=False)
-            if success:
-                # Attendre 60s que la radio se stabilise
-                _LOGGER.info("Waiting 60s for radio to stabilize...")
-                await asyncio.sleep(60)
-                await self.coordinator.async_request_refresh()
-                _LOGGER.info("2.4GHz radio deactivated successfully")
-            else:
-                _LOGGER.error("Failed to deactivate 2.4GHz radio")
-        except Exception as err:
-            _LOGGER.error("Error deactivating 2.4GHz radio: %s", err)
+        async with self._lock:
+            try:
+                success = await self._api.async_toggle_radio(slot=1, enable=False)
+                if success:
+                    self.coordinator.data.setdefault("radio", {})["slot1_active"] = False
+                    self.async_write_ha_state()
+                    _LOGGER.info("2.4GHz radio deactivated successfully")
+                else:
+                    _LOGGER.error("Failed to deactivate 2.4GHz radio")
+            except Exception as err:
+                _LOGGER.error("Error deactivating 2.4GHz radio: %s", err)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -202,6 +154,10 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
         self._api = api
         self._config_entry = config_entry
         self._attr_is_on = True  # On suppose qu'elle est active par défaut
+        lock_key = f"{config_entry.entry_id}_radio"
+        if lock_key not in _radio_locks:
+            _radio_locks[lock_key] = asyncio.Lock()
+        self._lock = _radio_locks[lock_key]
 
     @property
     def unique_id(self) -> str:
@@ -228,35 +184,41 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the 5GHz radio on."""
+        if self._lock.locked():
+            _LOGGER.warning("A radio toggle is already in progress, please wait")
+            return
+
         _LOGGER.info("Activating 5GHz radio")
-        try:
-            success = await self._api.async_toggle_radio(slot=2, enable=True)
-            if success:
-                # Attendre 60s que la radio se stabilise
-                _LOGGER.info("Waiting 60s for radio to stabilize...")
-                await asyncio.sleep(60)
-                await self.coordinator.async_request_refresh()
-                _LOGGER.info("5GHz radio activated successfully")
-            else:
-                _LOGGER.error("Failed to activate 5GHz radio")
-        except Exception as err:
-            _LOGGER.error("Error activating 5GHz radio: %s", err)
+        async with self._lock:
+            try:
+                success = await self._api.async_toggle_radio(slot=2, enable=True)
+                if success:
+                    self.coordinator.data.setdefault("radio", {})["slot2_active"] = True
+                    self.async_write_ha_state()
+                    _LOGGER.info("5GHz radio activated successfully")
+                else:
+                    _LOGGER.error("Failed to activate 5GHz radio")
+            except Exception as err:
+                _LOGGER.error("Error activating 5GHz radio: %s", err)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the 5GHz radio off."""
+        if self._lock.locked():
+            _LOGGER.warning("A radio toggle is already in progress, please wait")
+            return
+
         _LOGGER.info("Deactivating 5GHz radio")
-        try:
-            success = await self._api.async_toggle_radio(slot=2, enable=False)
-            if success:
-                # Attendre 60s que la radio se stabilise
-                _LOGGER.info("Waiting 60s for radio to stabilize...")
-                await asyncio.sleep(60)
-                await self.coordinator.async_request_refresh()
-                _LOGGER.info("5GHz radio deactivated successfully")
-            else:
-                _LOGGER.error("Failed to deactivate 5GHz radio")
-        except Exception as err:
-            _LOGGER.error("Error deactivating 5GHz radio: %s", err)
+        async with self._lock:
+            try:
+                success = await self._api.async_toggle_radio(slot=2, enable=False)
+                if success:
+                    self.coordinator.data.setdefault("radio", {})["slot2_active"] = False
+                    self.async_write_ha_state()
+                    _LOGGER.info("5GHz radio deactivated successfully")
+                else:
+                    _LOGGER.error("Failed to deactivate 5GHz radio")
+            except Exception as err:
+                _LOGGER.error("Error deactivating 5GHz radio: %s", err)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
