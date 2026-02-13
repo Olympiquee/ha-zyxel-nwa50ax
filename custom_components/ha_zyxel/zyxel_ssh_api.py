@@ -628,10 +628,14 @@ class ZyxelSSHAPI:
     async def async_toggle_radio(self, slot: int, enable: bool) -> bool:
         """Enable or disable radio (slot 1 = 2.4GHz, slot 2 = 5GHz)."""
         try:
+            # Déterminer le profil radio
+            # slot1 = default, slot2 = default2
+            profile = "default" if slot == 1 else "default2"
+            
             if enable:
                 commands = [
                     "configure terminal",
-                    f"wlan ap slot{slot}",
+                    f"wlan-radio-profile {profile}",
                     "activate",
                     "exit",
                     "write",
@@ -639,7 +643,7 @@ class ZyxelSSHAPI:
             else:
                 commands = [
                     "configure terminal",
-                    f"wlan ap slot{slot}",
+                    f"wlan-radio-profile {profile}",
                     "no activate",
                     "exit",
                     "write",
@@ -651,7 +655,7 @@ class ZyxelSSHAPI:
             )
             
             if success:
-                _LOGGER.info("Radio slot %d %s", slot, "activated" if enable else "deactivated")
+                _LOGGER.info("Radio slot %d (profile %s) %s", slot, profile, "activated" if enable else "deactivated")
             
             return success
             
