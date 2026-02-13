@@ -1,4 +1,5 @@
 """Switch platform for Zyxel integration - Guest SSID control."""
+import asyncio
 import logging
 from typing import Any
 
@@ -151,6 +152,9 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
         try:
             success = await self._api.async_toggle_radio(slot=1, enable=True)
             if success:
+                # Attendre 10s que la radio se stabilise
+                _LOGGER.info("Waiting 10s for radio to stabilize...")
+                await asyncio.sleep(10)
                 await self.coordinator.async_request_refresh()
                 _LOGGER.info("2.4GHz radio activated successfully")
             else:
@@ -164,6 +168,9 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
         try:
             success = await self._api.async_toggle_radio(slot=1, enable=False)
             if success:
+                # Attendre 10s que la radio se stabilise
+                _LOGGER.info("Waiting 10s for radio to stabilize...")
+                await asyncio.sleep(10)
                 await self.coordinator.async_request_refresh()
                 _LOGGER.info("2.4GHz radio deactivated successfully")
             else:
@@ -225,6 +232,9 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
         try:
             success = await self._api.async_toggle_radio(slot=2, enable=True)
             if success:
+                # Attendre 10s que la radio se stabilise
+                _LOGGER.info("Waiting 10s for radio to stabilize...")
+                await asyncio.sleep(10)
                 await self.coordinator.async_request_refresh()
                 _LOGGER.info("5GHz radio activated successfully")
             else:
@@ -238,6 +248,9 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
         try:
             success = await self._api.async_toggle_radio(slot=2, enable=False)
             if success:
+                # Attendre 10s que la radio se stabilise
+                _LOGGER.info("Waiting 10s for radio to stabilize...")
+                await asyncio.sleep(10)
                 await self.coordinator.async_request_refresh()
                 _LOGGER.info("5GHz radio deactivated successfully")
             else:
