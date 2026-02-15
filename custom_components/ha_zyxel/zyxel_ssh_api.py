@@ -701,24 +701,24 @@ class ZyxelSSHAPI:
     async def async_toggle_radio(self, slot: int, enable: bool) -> bool:
         """Enable or disable radio with retry and state verification."""
         try:
-            profile = "default" if slot == 1 else "default2"
             action = "activate" if enable else "deactivate"
             
+            # Commandes SSH - Contrôle direct du slot radio
             if enable:
                 commands = [
                     "configure terminal",
-                    f"wlan-radio-profile {profile}",
+                    f"wlan slot{slot}",
                     "activate",
                     "exit",
-                    "write",
+                    "exit",  # Pas de write - changement immédiat mais non persistant
                 ]
             else:
                 commands = [
                     "configure terminal",
-                    f"wlan-radio-profile {profile}",
+                    f"wlan slot{slot}",
                     "no activate",
                     "exit",
-                    "write",
+                    "exit",  # Pas de write - changement immédiat mais non persistant
                 ]
             
             for attempt in range(1, 3):
@@ -733,7 +733,8 @@ class ZyxelSSHAPI:
                     _LOGGER.error("Failed to execute radio command for slot %d", slot)
                     return False
 
-                for delay in (60, 30):
+                # Attendre 10s car changement immédiat sans write
+                for delay in (10, 5):
                     await asyncio.sleep(delay)
                     current_state = await self.async_get_radio_state(slot)
                     if current_state is None:
