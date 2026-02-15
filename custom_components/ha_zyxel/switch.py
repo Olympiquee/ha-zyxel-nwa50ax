@@ -118,7 +118,6 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
         super().__init__(coordinator)
         self._api = api
         self._config_entry = config_entry
-        self._attr_is_on = True
         
         # Lock global pour TOUTES les opérations radio
         lock_key = f"{config_entry.entry_id}_radio"
@@ -197,7 +196,7 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
             "band": radio.get("slot1_band", "Unknown"),
             "ssids": ", ".join(radio.get("slot1_ssids", [])),
             "description": "Contrôle la radio WiFi 2.4GHz (slot1)",
-            "note": "Toggle peut prendre jusqu'à 3 minutes",
+            "note": "Toggle prend ~15 secondes (pas de write)",
         }
 
 
@@ -213,7 +212,6 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
         super().__init__(coordinator)
         self._api = api
         self._config_entry = config_entry
-        self._attr_is_on = True
         
         # Lock global pour TOUTES les opérations radio (même que 2.4G)
         lock_key = f"{config_entry.entry_id}_radio"
@@ -292,5 +290,5 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
             "band": radio.get("slot2_band", "Unknown"),
             "ssids": ", ".join(radio.get("slot2_ssids", [])),
             "description": "Contrôle la radio WiFi 5GHz (slot2)",
-            "note": "Toggle peut prendre jusqu'à 3 minutes",
+            "note": "Toggle prend ~15 secondes (pas de write)",
         }
