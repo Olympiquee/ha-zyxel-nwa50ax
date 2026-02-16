@@ -663,6 +663,18 @@ class ZyxelSSHAPI:
             _LOGGER.error("Error getting radio state for slot %d: %s", slot, err)
             return None
 
+    async def _is_ap_responsive(self) -> bool:
+        """Check if AP responds to commands (lightweight ping)."""
+        try:
+            result = await asyncio.wait_for(
+                self._async_execute_command_direct("show version"),
+                timeout=5
+            )
+            return result is not None and len(result) > 10  # Au moins 10 chars = réponse valide
+        except Exception as err:
+            _LOGGER.debug("AP not responsive: %s", err)
+            return False
+
     async def async_toggle_guest_ssid(self, enable: bool) -> bool:
         """Enable or disable Guest SSID schedule."""
         try:
@@ -733,8 +745,10 @@ class ZyxelSSHAPI:
                     _LOGGER.error("Failed to execute radio command for slot %d", slot)
                     return False
 
-                # Attendre 10s car changement immédiat sans write
-                for delay in (10, 5):
+                # Attendre que la radio redémarre (activation) ou s'arrête (désactivation)
+                # Activation: radio redémarre (~20-30s), désactivation: instantané
+                delays = (30, 10) if enable else (10, 5)
+                for delay in delays:
                     await asyncio.sleep(delay)
                     current_state = await self.async_get_radio_state(slot)
                     if current_state is None:
@@ -742,6 +756,18 @@ class ZyxelSSHAPI:
                         continue
                     if current_state == enable:
                         _LOGGER.info("Radio slot %d successfully %sd", slot, action)
+                        
+                        # Si activation, vérifier que l'AP est responsive avant de retourner
+                        if enable:
+                            _LOGGER.info("Waiting for AP to become fully responsive after radio restart...")
+                            for ping_attempt in range(6):  # 6 × 5s = 30s max
+                                if await self._is_ap_responsive():
+                                    _LOGGER.info("AP responsive after %ds", (ping_attempt + 1) * 5)
+                                    return True
+                                _LOGGER.debug("AP not responsive yet, waiting 5s (attempt %d/6)", ping_attempt + 1)
+                                await asyncio.sleep(5)
+                            _LOGGER.warning("AP still not fully responsive after 30s, but radio is active")
+                        
                         return True
 
                 if attempt == 1:
