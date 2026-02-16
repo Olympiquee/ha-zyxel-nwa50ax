@@ -78,27 +78,8 @@ class ZyxelSSHAPI:
                 self._ssh_queue.task_done()
 
     async def _queue_ssh_operation(self, priority: int, operation_name: str, operation_coro: Any) -> Any:
-        """Queue an SSH operation and await its result.
-        
-        If priority=0 (radio toggle) and a lower priority operation is running,
-        cancel the running operation.
-        """
+        """Queue an SSH operation and await its result."""
         await self._ensure_queue_worker()
-        
-        # Cancel current operation if this is high priority (0) and something else is running
-        if priority == 0 and self._current_operation_task and not self._current_operation_task.done():
-            if self._current_operation_priority is not None and self._current_operation_priority > 0:
-                _LOGGER.warning(
-                    "Cancelling operation (priority=%d) for high-priority radio operation",
-                    self._current_operation_priority
-                )
-                self._current_operation_task.cancel()
-                # Wait a bit for cancellation to complete
-                try:
-                    await asyncio.wait_for(self._current_operation_task, timeout=2)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
-        
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         self._queue_counter += 1
@@ -407,6 +388,16 @@ class ZyxelSSHAPI:
                     self._pending_refresh_task = task
 
             return await task
+        except asyncio.CancelledError:
+            # Refresh annulé (radio toggle priority) - retourner données vides mais pas d'erreur
+            _LOGGER.info("Data refresh cancelled by higher priority operation, returning empty data")
+            return {
+                "device_info": {},
+                "status": {},
+                "clients": [],
+                "network": {},
+                "radio": {},
+            }
         except Exception as err:
             _LOGGER.error("Error queueing device data fetch: %s", err)
             return {
