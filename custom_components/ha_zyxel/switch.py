@@ -196,7 +196,7 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
             "band": radio.get("slot1_band", "Unknown"),
             "ssids": ", ".join(radio.get("slot1_ssids", [])),
             "description": "Contrôle la radio WiFi 2.4GHz (slot1)",
-            "note": "Toggle prend ~15 secondes (pas de write)",
+            "note": "Désactivation ~15s, Activation ~40-60s (attend AP responsive)",
         }
 
 
@@ -290,5 +290,5 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
             "band": radio.get("slot2_band", "Unknown"),
             "ssids": ", ".join(radio.get("slot2_ssids", [])),
             "description": "Contrôle la radio WiFi 5GHz (slot2)",
-            "note": "Toggle prend ~15 secondes (pas de write)",
+            "note": "Désactivation ~15s, Activation ~40-60s (attend AP responsive)",
         }
