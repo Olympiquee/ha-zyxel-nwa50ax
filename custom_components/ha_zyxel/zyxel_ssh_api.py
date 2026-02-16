@@ -29,6 +29,8 @@ class ZyxelSSHAPI:
         self._ssh_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
         self._queue_counter = 0
         self._queue_task: Optional[asyncio.Task] = None
+        self._current_operation_task: Optional[asyncio.Task] = None  # Track current running task
+        self._current_operation_priority: Optional[int] = None
         self._refresh_coalesce_lock = asyncio.Lock()
         self._pending_refresh_task: Optional[asyncio.Task] = None
         
@@ -50,18 +52,53 @@ class ZyxelSSHAPI:
             try:
                 if not future.cancelled():
                     _LOGGER.debug("Executing SSH operation '%s' (priority=%d)", operation_name, priority)
-                    result = await operation_coro()
+                    
+                    # Track current operation for potential cancellation
+                    self._current_operation_priority = priority
+                    self._current_operation_task = asyncio.create_task(operation_coro())
+                    
+                    result = await self._current_operation_task
                     future.set_result(result)
+                    
+                    self._current_operation_task = None
+                    self._current_operation_priority = None
+            except asyncio.CancelledError:
+                _LOGGER.warning("SSH operation '%s' cancelled", operation_name)
+                if not future.cancelled():
+                    future.cancel()
+                self._current_operation_task = None
+                self._current_operation_priority = None
             except Exception as err:
                 if not future.cancelled():
                     future.set_exception(err)
                 _LOGGER.error("SSH queue operation '%s' failed: %s", operation_name, err)
+                self._current_operation_task = None
+                self._current_operation_priority = None
             finally:
                 self._ssh_queue.task_done()
 
     async def _queue_ssh_operation(self, priority: int, operation_name: str, operation_coro: Any) -> Any:
-        """Queue an SSH operation and await its result."""
+        """Queue an SSH operation and await its result.
+        
+        If priority=0 (radio toggle) and a lower priority operation is running,
+        cancel the running operation.
+        """
         await self._ensure_queue_worker()
+        
+        # Cancel current operation if this is high priority (0) and something else is running
+        if priority == 0 and self._current_operation_task and not self._current_operation_task.done():
+            if self._current_operation_priority is not None and self._current_operation_priority > 0:
+                _LOGGER.warning(
+                    "Cancelling operation (priority=%d) for high-priority radio operation",
+                    self._current_operation_priority
+                )
+                self._current_operation_task.cancel()
+                # Wait a bit for cancellation to complete
+                try:
+                    await asyncio.wait_for(self._current_operation_task, timeout=2)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+        
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         self._queue_counter += 1
@@ -668,7 +705,7 @@ class ZyxelSSHAPI:
         try:
             result = await asyncio.wait_for(
                 self._async_execute_command_direct("show version"),
-                timeout=5
+                timeout=10  # Augmenté à 10s au lieu de 5s
             )
             return result is not None and len(result) > 10  # Au moins 10 chars = réponse valide
         except Exception as err:
