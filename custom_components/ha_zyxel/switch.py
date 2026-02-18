@@ -20,16 +20,23 @@ _radio_locks: dict[str, asyncio.Lock] = {}
 class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
     """Switch to control SSID schedule (enable/disable auto on/off)."""
 
-    def __init__(self, coordinator: DataUpdateCoordinator, api: ZyxelSSHAPI, ssid_name: str) -> None:
+    def __init__(
+        self,
+        coordinator: DataUpdateCoordinator,
+        api: ZyxelSSHAPI,
+        config_entry: ConfigEntry,
+        ssid_name: str,
+    ) -> None:
         """Initialize the SSID schedule switch."""
         super().__init__(coordinator)
         self._api = api
+        self._config_entry = config_entry
         self._ssid_name = ssid_name
-        self._attr_unique_id = f"zyxel_{coordinator.config_entry.entry_id}_ssid_schedule_{ssid_name.lower()}"
+        self._attr_unique_id = f"zyxel_{config_entry.entry_id}_ssid_schedule_{ssid_name.lower()}"
         self._attr_name = f"SSID {ssid_name} Schedule"
         self._attr_icon = "mdi:calendar-clock"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, coordinator.config_entry.entry_id)},
+            identifiers={(DOMAIN, config_entry.entry_id)},
         )
 
     @property
@@ -66,24 +73,6 @@ class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
             # Injecter l'état dans coordinator
             self.coordinator.data.setdefault("radio", {}).setdefault("ssid_schedules", {})[self._ssid_name] = False
             self.async_write_ha_state()
-
-
-async def async_setup_entry(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up Zyxel switches from a config entry."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
-    api = hass.data[DOMAIN][config_entry.entry_id]["api"]
-    
-    switches = [
-        ZyxelGuestSSIDSwitch(coordinator, api, config_entry),
-        ZyxelRadio24GSwitch(coordinator, api, config_entry),
-        ZyxelRadio5GSwitch(coordinator, api, config_entry),
-    ]
-    
-    async_add_entities(switches)
 
 
 class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
@@ -357,9 +346,9 @@ async def async_setup_entry(
     api = hass.data[DOMAIN][entry.entry_id]["api"]
 
     entities = [
-        ZyxelGuestSSIDSwitch(coordinator, api),
-        ZyxelRadio24Switch(coordinator, api),
-        ZyxelRadio5Switch(coordinator, api),
+        ZyxelGuestSSIDSwitch(coordinator, api, entry),
+        ZyxelRadio24GSwitch(coordinator, api, entry),
+        ZyxelRadio5GSwitch(coordinator, api, entry),
     ]
     
     # Auto-détection des SSIDs pour créer switches schedule
@@ -371,7 +360,7 @@ async def async_setup_entry(
             # Skip "Guest" car déjà géré par ZyxelGuestSSIDSwitch
             if ssid_name.lower() == "guest":
                 continue
-            entities.append(ZyxelSSIDScheduleSwitch(coordinator, api, ssid_name))
+            entities.append(ZyxelSSIDScheduleSwitch(coordinator, api, entry, ssid_name))
             
     except Exception as err:
         _LOGGER.error("Failed to auto-detect SSIDs, skipping schedule switches: %s", err)
