@@ -15,6 +15,57 @@ _LOGGER = logging.getLogger(__name__)
 _radio_locks: dict[str, asyncio.Lock] = {}
 
 
+class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
+    """Switch to control SSID schedule (enable/disable auto on/off)."""
+
+    def __init__(self, coordinator: DataUpdateCoordinator, api: ZyxelSSHAPI, ssid_name: str) -> None:
+        """Initialize the SSID schedule switch."""
+        super().__init__(coordinator)
+        self._api = api
+        self._ssid_name = ssid_name
+        self._attr_unique_id = f"zyxel_{coordinator.config_entry.entry_id}_ssid_schedule_{ssid_name.lower()}"
+        self._attr_name = f"SSID {ssid_name} Schedule"
+        self._attr_icon = "mdi:calendar-clock"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, coordinator.config_entry.entry_id)},
+        )
+
+    @property
+    def is_on(self) -> bool:
+        """Return true if SSID schedule is enabled."""
+        radio = self.coordinator.data.get("radio", {})
+        ssid_schedules = radio.get("ssid_schedules", {})
+        # Retourne True si schedule enable, False si disable (always-on)
+        return ssid_schedules.get(self._ssid_name, True)  # Défaut: schedule actif
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional attributes."""
+        return {
+            "ssid_name": self._ssid_name,
+            "description": f"Contrôle le schedule du SSID {self._ssid_name}",
+            "note": "ON = Schedule actif (auto on/off), OFF = Always-on",
+        }
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable SSID schedule (auto on/off)."""
+        _LOGGER.info("Enabling schedule for SSID %s", self._ssid_name)
+        success = await self._api.async_toggle_ssid_schedule(self._ssid_name, enable=True)
+        if success:
+            # Injecter l'état dans coordinator
+            self.coordinator.data.setdefault("radio", {}).setdefault("ssid_schedules", {})[self._ssid_name] = True
+            self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Disable SSID schedule (always-on)."""
+        _LOGGER.info("Disabling schedule for SSID %s (always-on)", self._ssid_name)
+        success = await self._api.async_toggle_ssid_schedule(self._ssid_name, enable=False)
+        if success:
+            # Injecter l'état dans coordinator
+            self.coordinator.data.setdefault("radio", {}).setdefault("ssid_schedules", {})[self._ssid_name] = False
+            self.async_write_ha_state()
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -292,3 +343,35 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
             "description": "Contrôle la radio WiFi 5GHz (slot2)",
             "note": "Désactivation ~15s, Activation ~40-60s (attend AP responsive)",
         }
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Zyxel switches."""
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    api = hass.data[DOMAIN][entry.entry_id]["api"]
+
+    entities = [
+        ZyxelGuestSSIDSwitch(coordinator, api),
+        ZyxelRadio24Switch(coordinator, api),
+        ZyxelRadio5Switch(coordinator, api),
+    ]
+    
+    # Auto-détection des SSIDs pour créer switches schedule
+    try:
+        ssid_list = await api.async_get_ssid_list()
+        _LOGGER.info("Creating SSID schedule switches for: %s", ssid_list)
+        
+        for ssid_name in ssid_list:
+            # Skip "Guest" car déjà géré par ZyxelGuestSSIDSwitch
+            if ssid_name.lower() == "guest":
+                continue
+            entities.append(ZyxelSSIDScheduleSwitch(coordinator, api, ssid_name))
+            
+    except Exception as err:
+        _LOGGER.error("Failed to auto-detect SSIDs, skipping schedule switches: %s", err)
+
+    async_add_entities(entities)
