@@ -597,8 +597,10 @@ class ZyxelSSHAPI:
             "slot2_active": False,
             "slot2_band": "Unknown",
             "slot2_ssids": [],
+            "ssid_schedules": {},  # Nouveau: {ssid_name: schedule_enabled}
         }
         
+        # Parse slot1
         slot1_match = re.search(r'slot: slot1.*?Activate: (\w+).*?Band: ([\dG.]+)', output, re.DOTALL)
         if slot1_match:
             radio["slot1_active"] = slot1_match.group(1).lower() == "yes"
@@ -608,7 +610,22 @@ class ZyxelSSHAPI:
         if slot1_block:
             ssids = re.findall(r'SSID_profile_\d+:\s*(\S+)', slot1_block.group(1))
             radio["slot1_ssids"] = [s for s in ssids if s]
+            
+            # Parser les schedules pour chaque SSID
+            for match in re.finditer(r'SSID_profile_(\d+):\s*(\S+)', slot1_block.group(1)):
+                profile_num = match.group(1)
+                ssid_name = match.group(2)
+                
+                # Chercher le schedule correspondant
+                schedule_match = re.search(
+                    rf'SSID_profile_{profile_num}_schedule:\s*(\w+)',
+                    slot1_block.group(1)
+                )
+                if schedule_match:
+                    schedule_enabled = schedule_match.group(1).lower() == "enable"
+                    radio["ssid_schedules"][ssid_name] = schedule_enabled
         
+        # Parse slot2
         slot2_match = re.search(r'slot: slot2.*?Activate: (\w+).*?Band: ([\dG.]+)', output, re.DOTALL)
         if slot2_match:
             radio["slot2_active"] = slot2_match.group(1).lower() == "yes"
@@ -618,6 +635,23 @@ class ZyxelSSHAPI:
         if slot2_block:
             ssids = re.findall(r'SSID_profile_\d+:\s*(\S+)', slot2_block.group(1))
             radio["slot2_ssids"] = [s for s in ssids if s]
+            
+            # Parser les schedules pour slot2
+            for match in re.finditer(r'SSID_profile_(\d+):\s*(\S+)', slot2_block.group(1)):
+                profile_num = match.group(1)
+                ssid_name = match.group(2)
+                
+                # Si SSID déjà présent (slot1), skip pour éviter doublon
+                if ssid_name in radio["ssid_schedules"]:
+                    continue
+                
+                schedule_match = re.search(
+                    rf'SSID_profile_{profile_num}_schedule:\s*(\w+)',
+                    slot2_block.group(1)
+                )
+                if schedule_match:
+                    schedule_enabled = schedule_match.group(1).lower() == "enable"
+                    radio["ssid_schedules"][ssid_name] = schedule_enabled
         
         return radio
 
@@ -736,6 +770,71 @@ class ZyxelSSHAPI:
             
         except Exception as err:
             _LOGGER.error("Error toggling guest SSID: %s", err)
+            return False
+
+    async def async_get_ssid_list(self) -> list[str]:
+        """Get list of configured SSIDs from device.
+        
+        Returns:
+            List of SSID names (e.g., ["6fer", "Guest", "IoT"])
+        """
+        try:
+            data = await self.async_get_data()
+            radio = data.get("radio", {})
+            
+            # Combiner SSIDs de slot1 et slot2, sans doublons
+            all_ssids = set()
+            all_ssids.update(radio.get("slot1_ssids", []))
+            all_ssids.update(radio.get("slot2_ssids", []))
+            
+            # Retirer les entrées vides
+            ssid_list = [ssid for ssid in all_ssids if ssid]
+            
+            _LOGGER.info("Detected SSIDs: %s", ssid_list)
+            return sorted(ssid_list)
+            
+        except Exception as err:
+            _LOGGER.error("Error getting SSID list: %s", err)
+            return []
+
+    async def async_toggle_ssid_schedule(self, ssid_name: str, enable: bool) -> bool:
+        """Enable or disable SSID schedule.
+        
+        Args:
+            ssid_name: Name of SSID profile (e.g., "6fer")
+            enable: True to enable schedule, False to disable (always-on)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            action = "enable" if enable else "disable"
+            _LOGGER.info("SSID '%s': %s schedule", ssid_name, action)
+            
+            commands = [
+                "configure terminal",
+                f"wlan-ssid-profile {ssid_name}",
+                "ssid-schedule" if enable else "no ssid-schedule",
+                "exit",
+                "write",  # Sauvegarder car changement de config permanent
+                "exit",
+            ]
+            
+            success = await self._queue_ssh_operation(
+                5,  # Priority 5 (entre radio=0 et refresh=30)
+                f"ssid_schedule:{ssid_name}:{action}",
+                lambda cmds=commands: self._async_execute_command_batch_direct(cmds),
+            )
+            
+            if success:
+                _LOGGER.info("SSID '%s' schedule %sd successfully", ssid_name, action)
+                return True
+            else:
+                _LOGGER.error("Failed to %s schedule for SSID '%s'", action, ssid_name)
+                return False
+                
+        except Exception as err:
+            _LOGGER.error("Error toggling SSID schedule for '%s': %s", ssid_name, err)
             return False
 
     async def async_toggle_radio(self, slot: int, enable: bool) -> bool:
