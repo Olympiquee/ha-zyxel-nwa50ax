@@ -597,7 +597,6 @@ class ZyxelSSHAPI:
             "slot2_active": False,
             "slot2_band": "Unknown",
             "slot2_ssids": [],
-            "ssid_schedules": {},  # Nouveau: {ssid_name: schedule_enabled}
         }
         
         # Parse slot1
@@ -610,20 +609,6 @@ class ZyxelSSHAPI:
         if slot1_block:
             ssids = re.findall(r'SSID_profile_\d+:\s*(\S+)', slot1_block.group(1))
             radio["slot1_ssids"] = [s for s in ssids if s]
-            
-            # Parser les schedules pour chaque SSID
-            for match in re.finditer(r'SSID_profile_(\d+):\s*(\S+)', slot1_block.group(1)):
-                profile_num = match.group(1)
-                ssid_name = match.group(2)
-                
-                # Chercher le schedule correspondant
-                schedule_match = re.search(
-                    rf'SSID_profile_{profile_num}_schedule:\s*(\w+)',
-                    slot1_block.group(1)
-                )
-                if schedule_match:
-                    schedule_enabled = schedule_match.group(1).lower() == "enable"
-                    radio["ssid_schedules"][ssid_name] = schedule_enabled
         
         # Parse slot2
         slot2_match = re.search(r'slot: slot2.*?Activate: (\w+).*?Band: ([\dG.]+)', output, re.DOTALL)
@@ -635,23 +620,6 @@ class ZyxelSSHAPI:
         if slot2_block:
             ssids = re.findall(r'SSID_profile_\d+:\s*(\S+)', slot2_block.group(1))
             radio["slot2_ssids"] = [s for s in ssids if s]
-            
-            # Parser les schedules pour slot2
-            for match in re.finditer(r'SSID_profile_(\d+):\s*(\S+)', slot2_block.group(1)):
-                profile_num = match.group(1)
-                ssid_name = match.group(2)
-                
-                # Si SSID déjà présent (slot1), skip pour éviter doublon
-                if ssid_name in radio["ssid_schedules"]:
-                    continue
-                
-                schedule_match = re.search(
-                    rf'SSID_profile_{profile_num}_schedule:\s*(\w+)',
-                    slot2_block.group(1)
-                )
-                if schedule_match:
-                    schedule_enabled = schedule_match.group(1).lower() == "enable"
-                    radio["ssid_schedules"][ssid_name] = schedule_enabled
         
         return radio
 
@@ -797,42 +765,103 @@ class ZyxelSSHAPI:
             _LOGGER.error("Error getting SSID list: %s", err)
             return []
 
-    async def async_toggle_ssid_schedule(self, ssid_name: str, enable: bool) -> bool:
-        """Enable or disable SSID schedule.
+    async def async_get_ssid_schedule_state(self, ssid_name: str) -> Optional[bool]:
+        """Get current schedule state for a specific SSID.
         
         Args:
-            ssid_name: Name of SSID profile (e.g., "6fer")
-            enable: True to enable schedule, False to disable (always-on)
+            ssid_name: Name of SSID (e.g., "Home")
         
         Returns:
-            True if successful, False otherwise
+            True if schedule enabled (mode: yes), False if disabled (mode: no), None if undetermined
+        """
+        try:
+            output = await self._queue_ssh_operation(
+                10,  # Priority 10 (comme radio state check)
+                f"ssid_schedule:state:{ssid_name}",
+                lambda: self._async_execute_command_direct(f"show wlan-ssid-profile {ssid_name}"),
+            )
+            
+            if not output:
+                return None
+            
+            # Chercher "SSID_schedule_mode: yes/no"
+            match = re.search(r'SSID_schedule_mode:\s*(\w+)', output)
+            if match:
+                mode = match.group(1).lower()
+                # yes = schedule actif (ON), no = schedule désactivé (OFF)
+                is_enabled = mode == "yes"
+                _LOGGER.debug("SSID '%s' schedule mode: %s (enabled=%s)", ssid_name, mode, is_enabled)
+                return is_enabled
+            
+            _LOGGER.warning("Could not find SSID_schedule_mode in output for '%s'", ssid_name)
+            return None
+            
+        except Exception as err:
+            _LOGGER.error("Error getting SSID schedule state for '%s': %s", ssid_name, err)
+            return None
+
+    async def async_toggle_ssid_schedule(self, ssid_name: str, enable: bool) -> bool:
+        """Enable or disable SSID schedule with state verification.
+        
+        Args:
+            ssid_name: Name of SSID profile (e.g., "Home")
+            enable: True to enable schedule (mode: yes), False to disable (mode: no, always-on)
+        
+        Returns:
+            True if successful and state verified, False otherwise
         """
         try:
             action = "enable" if enable else "disable"
-            _LOGGER.info("SSID '%s': %s schedule", ssid_name, action)
             
-            commands = [
-                "configure terminal",
-                f"wlan-ssid-profile {ssid_name}",
-                "ssid-schedule" if enable else "no ssid-schedule",
-                "exit",
-                "write",  # Sauvegarder car changement de config permanent
-                "exit",
-            ]
-            
-            success = await self._queue_ssh_operation(
-                5,  # Priority 5 (entre radio=0 et refresh=30)
-                f"ssid_schedule:{ssid_name}:{action}",
-                lambda cmds=commands: self._async_execute_command_batch_direct(cmds),
-            )
-            
-            if success:
-                _LOGGER.info("SSID '%s' schedule %sd successfully", ssid_name, action)
-                return True
-            else:
-                _LOGGER.error("Failed to %s schedule for SSID '%s'", action, ssid_name)
-                return False
+            for attempt in range(1, 3):  # Max 2 tentatives
+                _LOGGER.info("SSID '%s': %s schedule (attempt %d/2)", ssid_name, action, attempt)
                 
+                # Commandes SSH SANS write (temporaire, comme Radio toggle)
+                commands = [
+                    "configure terminal",
+                    f"wlan-ssid-profile {ssid_name}",
+                    "ssid-schedule" if enable else "no ssid-schedule",
+                    "exit",
+                    "exit",  # Pas de write - changement temporaire
+                ]
+                
+                # Envoyer commande
+                success = await self._queue_ssh_operation(
+                    5,  # Priority 5 (entre radio=0 et refresh=30)
+                    f"ssid_schedule:{ssid_name}:{action}:attempt{attempt}",
+                    lambda cmds=commands: self._async_execute_command_batch_direct(cmds),
+                )
+                
+                if not success:
+                    _LOGGER.error("Failed to execute command for SSID '%s'", ssid_name)
+                    if attempt == 1:
+                        continue  # Retry
+                    return False
+                
+                # Attendre application (court délai, pas de write donc rapide)
+                await asyncio.sleep(5)
+                
+                # Vérifier état réel
+                current_state = await self.async_get_ssid_schedule_state(ssid_name)
+                
+                if current_state is None:
+                    _LOGGER.warning("SSID '%s' state undetermined after 5s", ssid_name)
+                    if attempt == 1:
+                        continue  # Retry
+                    return False
+                
+                if current_state == enable:
+                    _LOGGER.info("SSID '%s' schedule %sd successfully", ssid_name, action)
+                    return True
+                
+                # État pas bon, retry
+                if attempt == 1:
+                    _LOGGER.warning("SSID '%s' state not as expected (expected=%s, got=%s), retrying", 
+                                  ssid_name, enable, current_state)
+            
+            _LOGGER.error("SSID '%s' failed to reach desired state after all attempts", ssid_name)
+            return False
+            
         except Exception as err:
             _LOGGER.error("Error toggling SSID schedule for '%s': %s", ssid_name, err)
             return False
