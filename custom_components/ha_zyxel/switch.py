@@ -32,6 +32,7 @@ class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
         self._api = api
         self._config_entry = config_entry
         self._ssid_name = ssid_name
+        self._attr_is_on = True  # Défaut: schedule actif (mode: yes)
         self._attr_unique_id = f"zyxel_{config_entry.entry_id}_ssid_schedule_{ssid_name.lower()}"
         self._attr_name = f"SSID {ssid_name} Schedule"
         self._attr_icon = "mdi:calendar-clock"
@@ -42,10 +43,7 @@ class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return true if SSID schedule is enabled."""
-        radio = self.coordinator.data.get("radio", {})
-        ssid_schedules = radio.get("ssid_schedules", {})
-        # Retourne True si schedule enable, False si disable (always-on)
-        return ssid_schedules.get(self._ssid_name, True)  # Défaut: schedule actif
+        return self._attr_is_on
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -53,7 +51,7 @@ class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
         return {
             "ssid_name": self._ssid_name,
             "description": f"Contrôle le schedule du SSID {self._ssid_name}",
-            "note": "ON = Schedule actif (auto on/off), OFF = Always-on",
+            "note": "ON = Schedule actif (auto on/off), OFF = Always-on (24/7)",
         }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -61,18 +59,24 @@ class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
         _LOGGER.info("Enabling schedule for SSID %s", self._ssid_name)
         success = await self._api.async_toggle_ssid_schedule(self._ssid_name, enable=True)
         if success:
-            # Injecter l'état dans coordinator
-            self.coordinator.data.setdefault("radio", {}).setdefault("ssid_schedules", {})[self._ssid_name] = True
+            # Update état seulement si commande vérifiée
+            self._attr_is_on = True
             self.async_write_ha_state()
+            _LOGGER.info("SSID %s schedule enabled successfully", self._ssid_name)
+        else:
+            _LOGGER.error("Failed to enable schedule for SSID %s", self._ssid_name)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable SSID schedule (always-on)."""
         _LOGGER.info("Disabling schedule for SSID %s (always-on)", self._ssid_name)
         success = await self._api.async_toggle_ssid_schedule(self._ssid_name, enable=False)
         if success:
-            # Injecter l'état dans coordinator
-            self.coordinator.data.setdefault("radio", {}).setdefault("ssid_schedules", {})[self._ssid_name] = False
+            # Update état seulement si commande vérifiée
+            self._attr_is_on = False
             self.async_write_ha_state()
+            _LOGGER.info("SSID %s schedule disabled successfully (always-on)", self._ssid_name)
+        else:
+            _LOGGER.error("Failed to disable schedule for SSID %s", self._ssid_name)
 
 
 class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
