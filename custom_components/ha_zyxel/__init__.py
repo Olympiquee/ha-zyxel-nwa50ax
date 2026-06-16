@@ -1,4 +1,4 @@
-"""The Zyxel NWA50AX integration (SSH version)."""
+"""The Zyxel NWA50AX integration."""
 import asyncio
 import logging
 from datetime import timedelta
@@ -12,18 +12,16 @@ from .const import (
     CONF_HOST,
     CONF_PASSWORD,
     CONF_USERNAME,
-    CONF_PORT,
-    CONF_SCAN_INTERVAL,
-    CONF_AUTO_UPDATE,
+    CONF_UPDATE_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
-    DEFAULT_AUTO_UPDATE,
+    DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
-from .zyxel_ssh_api import ZyxelSSHAPI
+from .zyxel_api import ZyxelAPI
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "button", "switch"]
+PLATFORMS = ["sensor", "button"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -31,16 +29,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     host = entry.data[CONF_HOST]
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
-    port = entry.data.get(CONF_PORT, 22)
-    scan_interval = entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-    auto_update = entry.data.get(CONF_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)
+    
+    # Lire update_interval depuis options (configurable via UI)
+    # Fallback sur DEFAULT_UPDATE_INTERVAL si pas configuré
+    update_interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
 
-    api = ZyxelSSHAPI(host, username, password, port)
+    api = ZyxelAPI(host, username, password)
 
     try:
-        connected = await api.async_connect()
-        if not connected:
-            raise ConfigEntryNotReady("Failed to connect to device via SSH")
+        await api.async_login()
     except Exception as ex:
         _LOGGER.error("Could not connect to Zyxel device: %s", ex)
         raise ConfigEntryNotReady from ex
@@ -48,30 +45,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def async_update_data():
         """Fetch data from the device."""
         try:
-            return await asyncio.wait_for(api.async_get_data(), timeout=50.0)
+            return await asyncio.wait_for(api.async_get_data(), timeout=15.0)
         except asyncio.TimeoutError as err:
             raise UpdateFailed("Device data fetch timed out") from err
         except Exception as err:
             raise UpdateFailed(f"Error communicating with device: {err}") from err
 
-    # Créer le coordinator avec ou sans auto-update
-    if auto_update:
-        coordinator = DataUpdateCoordinator(
-            hass,
-            _LOGGER,
-            name=DOMAIN,
-            update_method=async_update_data,
-            update_interval=timedelta(seconds=scan_interval),
-        )
-    else:
-        # Mode manuel : pas d'update_interval
-        coordinator = DataUpdateCoordinator(
-            hass,
-            _LOGGER,
-            name=DOMAIN,
-            update_method=async_update_data,
-            update_interval=None,  # Désactive les mises à jour automatiques
-        )
+    coordinator = DataUpdateCoordinator(
+        hass,
+        _LOGGER,
+        name=DOMAIN,
+        update_method=async_update_data,
+        update_interval=timedelta(seconds=update_interval),
+    )
 
     await coordinator.async_config_entry_first_refresh()
 
@@ -82,6 +68,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    
+    # Ajouter listener pour recharger quand options changent
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     return True
 
@@ -92,7 +81,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unload_ok:
         api = hass.data[DOMAIN][entry.entry_id]["api"]
-        await api.async_disconnect()
+        await api.async_logout()
         hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok
+
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload config entry when options change."""
+    await async_unload_entry(hass, entry)
+    await async_setup_entry(hass, entry)
