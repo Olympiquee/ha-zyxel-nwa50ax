@@ -18,5 +18,16 @@
     "abort": {
       "already_configured": "Device is already configured"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Zyxel NWA50AX Options",
+        "description": "Configure integration options",
+        "data": {
+          "update_interval": "Refresh interval (seconds)"
+        }
+      }
+    }
   }
 }
