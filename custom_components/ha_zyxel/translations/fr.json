@@ -18,5 +18,16 @@
     "abort": {
       "already_configured": "Ce périphérique est déjà configuré"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options Zyxel NWA50AX",
+        "description": "Configurer les options de l'intégration",
+        "data": {
+          "update_interval": "Intervalle de rafraîchissement (secondes)"
+        }
+      }
+    }
   }
 }
