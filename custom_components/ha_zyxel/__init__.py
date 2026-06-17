@@ -1,9 +1,9 @@
 """The Zyxel NWA50AX integration."""
-import asyncio
 import logging
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -13,43 +13,42 @@ from .const import (
     CONF_PASSWORD,
     CONF_USERNAME,
     CONF_UPDATE_INTERVAL,
-    DEFAULT_SCAN_INTERVAL,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
-from .zyxel_api import ZyxelAPI
+from .zyxel_ssh_api import ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "button"]
+PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.BUTTON]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Zyxel integration from a config entry."""
+    """Set up Zyxel from a config entry."""
     host = entry.data[CONF_HOST]
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
-    
+
     # Lire update_interval depuis options (configurable via UI)
-    # Fallback sur DEFAULT_UPDATE_INTERVAL si pas configuré
     update_interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
 
-    api = ZyxelAPI(host, username, password)
+    api = ZyxelSSHAPI(host, username, password)
 
-    try:
-        await api.async_login()
-    except Exception as ex:
-        _LOGGER.error("Could not connect to Zyxel device: %s", ex)
-        raise ConfigEntryNotReady from ex
+    if not await api.async_connect():
+        raise ConfigEntryNotReady(f"Cannot connect to {host}")
 
     async def async_update_data():
-        """Fetch data from the device."""
+        """Fetch data from API."""
+        # Skip auto-refresh si radio toggle en cours (priority=0)
+        if hasattr(api, '_current_operation_priority') and api._current_operation_priority == 0:
+            _LOGGER.debug("Skipping auto-refresh: radio operation in progress (priority=0)")
+            if coordinator.data:
+                return coordinator.data
+
         try:
-            return await asyncio.wait_for(api.async_get_data(), timeout=15.0)
-        except asyncio.TimeoutError as err:
-            raise UpdateFailed("Device data fetch timed out") from err
+            return await api.async_get_data()
         except Exception as err:
-            raise UpdateFailed(f"Error communicating with device: {err}") from err
+            raise UpdateFailed(f"Error communicating with API: {err}")
 
     coordinator = DataUpdateCoordinator(
         hass,
@@ -68,8 +67,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    
-    # Ajouter listener pour recharger quand options changent
+
+    # Recharger automatiquement quand options changent
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     return True
@@ -81,7 +80,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unload_ok:
         api = hass.data[DOMAIN][entry.entry_id]["api"]
-        await api.async_logout()
+        await api.async_disconnect()
         hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok
