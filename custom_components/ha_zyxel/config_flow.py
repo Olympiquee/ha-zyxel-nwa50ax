@@ -3,12 +3,20 @@ import logging
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DEFAULT_HOST, DEFAULT_USERNAME, DEFAULT_UPDATE_INTERVAL, CONF_UPDATE_INTERVAL, DOMAIN
-from .zyxel_api import ZyxelAPI
+from .const import (
+    CONF_HOST,
+    CONF_PASSWORD,
+    CONF_USERNAME,
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_HOST,
+    DEFAULT_USERNAME,
+    DEFAULT_UPDATE_INTERVAL,
+    DOMAIN,
+)
+from .zyxel_ssh_api import ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,27 +35,19 @@ async def validate_input(hass: HomeAssistant, data: dict) -> dict:
     username = data[CONF_USERNAME]
     password = data[CONF_PASSWORD]
 
-    # Sanitize host
-    if not host.startswith("http://") and not host.startswith("https://"):
-        host = f"https://{host}"
-
-    api = ZyxelAPI(host, username, password)
+    api = ZyxelSSHAPI(host, username, password)
 
     try:
-        login_success = await api.async_login()
-        if not login_success:
-            raise CannotConnect("Login failed - check credentials")
-        
-        # Get device info to confirm connection
-        device_data = await api.async_get_data()
-        
-        await api.async_logout()
-        
+        connected = await api.async_connect()
+        if not connected:
+            raise CannotConnect("Cannot connect - check host, username and password")
+    except CannotConnect:
+        raise
     except Exception as ex:
         _LOGGER.error("Unable to connect to Zyxel device: %s", ex)
         raise CannotConnect from ex
 
-    return {"title": f"Zyxel {device_data.get('device_info', {}).get('model', 'Device')} ({host})"}
+    return {"title": f"Zyxel NWA50AX ({host})"}
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -60,39 +60,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            host = user_input[CONF_HOST]
-            
-            # Sanitize entry
-            if not host.startswith("http://") and not host.startswith("https://"):
-                host = f"https://{host}"
-                user_input[CONF_HOST] = host
-
             try:
                 info = await validate_input(self.hass, user_input)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
-                
-                # Try HTTP if HTTPS failed
-                if "https://" in host:
-                    _LOGGER.info("HTTPS failed, trying HTTP...")
-                    user_input[CONF_HOST] = host.replace("https://", "http://")
-                    try:
-                        info = await validate_input(self.hass, user_input)
-                        errors = {}
-                    except CannotConnect:
-                        errors["base"] = "cannot_connect"
-                    except Exception:  # pylint: disable=broad-except
-                        _LOGGER.exception("Unexpected exception")
-                        errors["base"] = "unknown"
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
 
             if not errors:
-                # Check if already configured
                 await self.async_set_unique_id(user_input[CONF_HOST])
                 self._abort_if_unique_id_configured()
-                
                 return self.async_create_entry(title=info["title"], data=user_input)
 
         return self.async_show_form(
@@ -130,14 +108,9 @@ class OptionsFlow(config_entries.OptionsFlow):
                     default=current_interval
                 ): vol.All(
                     vol.Coerce(int),
-                    vol.Range(min=10, max=3600)  # 10s à 60 minutes
+                    vol.Range(min=10, max=3600)
                 ),
             }),
-            description_placeholders={
-                "current": str(current_interval),
-                "min": "10 secondes",
-                "max": "60 minutes (3600s)",
-            },
         )
 
 
