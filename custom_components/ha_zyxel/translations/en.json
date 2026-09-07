@@ -23,9 +23,16 @@
     "step": {
       "init": {
         "title": "Zyxel NWA50AX Options",
-        "description": "Configure integration options",
+        "description": "Refresh groups: Fast = radios + connected clients. Slow = CPU/RAM/interfaces/port + SSID schedules. Daily = model/firmware. A MikroTik connection is optional and only used to resolve device hostnames from DHCP leases - fully decoupled from the Zyxel AP connection.",
         "data": {
-          "update_interval": "Refresh interval (seconds)"
+          "fast_interval": "Fast group interval (seconds)",
+          "slow_interval": "Slow group interval (seconds)",
+          "daily_interval": "Daily group interval (seconds)",
+          "mikrotik_enabled": "Enable MikroTik hostname resolver",
+          "mikrotik_host": "MikroTik IP address",
+          "mikrotik_username": "MikroTik username",
+          "mikrotik_password": "MikroTik password",
+          "mikrotik_refresh_interval": "MikroTik lease refresh interval (seconds)"
         }
       }
     }
