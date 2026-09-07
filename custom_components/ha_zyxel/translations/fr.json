@@ -23,9 +23,16 @@
     "step": {
       "init": {
         "title": "Options Zyxel NWA50AX",
-        "description": "Configurer les options de l'intégration",
+        "description": "Groupes de rafraîchissement : Rapide = radios + clients connectés. Lent = CPU/RAM/interfaces/port + schedules SSID. Quotidien = modèle/firmware. La connexion MikroTik est optionnelle, utilisée uniquement pour résoudre les noms d'appareils depuis les baux DHCP - totalement découplée de la connexion à l'AP Zyxel.",
         "data": {
-          "update_interval": "Intervalle de rafraîchissement (secondes)"
+          "fast_interval": "Intervalle groupe rapide (secondes)",
+          "slow_interval": "Intervalle groupe lent (secondes)",
+          "daily_interval": "Intervalle groupe quotidien (secondes)",
+          "mikrotik_enabled": "Activer le résolveur de noms MikroTik",
+          "mikrotik_host": "Adresse IP du MikroTik",
+          "mikrotik_username": "Nom d'utilisateur MikroTik",
+          "mikrotik_password": "Mot de passe MikroTik",
+          "mikrotik_refresh_interval": "Intervalle de rafraîchissement des baux MikroTik (secondes)"
         }
       }
     }
