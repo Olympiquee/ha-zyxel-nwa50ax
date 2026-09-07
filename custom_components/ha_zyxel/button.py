@@ -6,9 +6,11 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 
 from .const import DOMAIN
+from .entity_helpers import build_device_info
+from .zyxel_ssh_api import ZyxelConnectionError, ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,14 +21,24 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Zyxel buttons from a config entry."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
-    api = hass.data[DOMAIN][config_entry.entry_id]["api"]
-    
+    entry_data = hass.data[DOMAIN][config_entry.entry_id]
+
     buttons = [
-        ZyxelRebootButton(coordinator, api, config_entry),
-        ZyxelUpdateButton(coordinator, api, config_entry),
+        ZyxelRebootButton(entry_data["coordinator_fast"], entry_data["api"], config_entry),
+        ZyxelGroupRefreshButton(
+            entry_data["coordinator_fast"], entry_data["api"], config_entry,
+            group="fast", label="Refresh (rapide)",
+        ),
+        ZyxelGroupRefreshButton(
+            entry_data["coordinator_slow"], entry_data["api"], config_entry,
+            group="slow", label="Refresh (lent)",
+        ),
+        ZyxelGroupRefreshButton(
+            entry_data["coordinator_daily"], entry_data["api"], config_entry,
+            group="daily", label="Refresh (quotidien)",
+        ),
     ]
-    
+
     async_add_entities(buttons)
 
 
@@ -37,7 +49,7 @@ class ZyxelRebootButton(CoordinatorEntity, ButtonEntity):
     _attr_icon = "mdi:restart"
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, api, config_entry: ConfigEntry) -> None:
+    def __init__(self, coordinator: DataUpdateCoordinator, api: ZyxelSSHAPI, config_entry: ConfigEntry) -> None:
         """Initialize the button."""
         super().__init__(coordinator)
         self._api = api
@@ -50,15 +62,7 @@ class ZyxelRebootButton(CoordinatorEntity, ButtonEntity):
 
     @property
     def device_info(self) -> dict[str, Any]:
-        """Return device information."""
-        device_data = self.coordinator.data.get("device_info", {})
-        return {
-            "identifiers": {(DOMAIN, self._config_entry.entry_id)},
-            "name": f"Zyxel {device_data.get('model', 'NWA50AX')}",
-            "manufacturer": "Zyxel",
-            "model": device_data.get("model", "NWA50AX"),
-            "sw_version": device_data.get("firmware", "Unknown"),
-        }
+        return build_device_info(self.hass, self._config_entry.entry_id)
 
     async def async_press(self) -> None:
         """Handle the button press."""
@@ -73,41 +77,52 @@ class ZyxelRebootButton(CoordinatorEntity, ButtonEntity):
             _LOGGER.error("Error rebooting device: %s", err)
 
 
-class ZyxelUpdateButton(CoordinatorEntity, ButtonEntity):
-    """Button to manually update device data."""
+class ZyxelGroupRefreshButton(CoordinatorEntity, ButtonEntity):
+    """Bouton de rafraîchissement manuel pour un groupe (fast/slow/daily).
 
-    _attr_name = "Update Data"
+    Passe par `async_get_group_data(group, manual=True)` : la demande prend la
+    priorité sur les cycles automatiques (y compris ceux du même groupe) et
+    n'est jamais bloquée par le backoff appliqué aux cycles automatiques.
+    """
+
     _attr_icon = "mdi:refresh"
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, api, config_entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        coordinator: DataUpdateCoordinator,
+        api: ZyxelSSHAPI,
+        config_entry: ConfigEntry,
+        group: str,
+        label: str,
+    ) -> None:
         """Initialize the button."""
         super().__init__(coordinator)
         self._api = api
         self._config_entry = config_entry
+        self._group = group
+        self._attr_name = label
 
     @property
     def unique_id(self) -> str:
         """Return unique ID."""
-        return f"{self._config_entry.entry_id}_update"
+        return f"{self._config_entry.entry_id}_refresh_{self._group}"
 
     @property
     def device_info(self) -> dict[str, Any]:
-        """Return device information."""
-        device_data = self.coordinator.data.get("device_info", {})
-        return {
-            "identifiers": {(DOMAIN, self._config_entry.entry_id)},
-            "name": f"Zyxel {device_data.get('model', 'NWA50AX')}",
-            "manufacturer": "Zyxel",
-            "model": device_data.get("model", "NWA50AX"),
-            "sw_version": device_data.get("firmware", "Unknown"),
-        }
+        return build_device_info(self.hass, self._config_entry.entry_id)
 
     async def async_press(self) -> None:
-        """Handle the button press - refresh data."""
-        _LOGGER.info("Manually refreshing Zyxel device data")
+        """Handle the button press - rafraîchissement manuel prioritaire."""
+        _LOGGER.info("Rafraîchissement manuel du groupe '%s'", self._group)
         try:
-            await self.coordinator.async_request_refresh()
-            _LOGGER.info("Data refresh completed")
+            data = await self._api.async_get_group_data(self._group, manual=True)
+            # Pousse directement le résultat dans le coordinator : notifie les
+            # entités et réarme le minuteur du cycle automatique à partir de
+            # maintenant (pas de double lecture rapprochée).
+            self.coordinator.async_set_updated_data(data)
+            _LOGGER.info("Rafraîchissement manuel du groupe '%s' terminé", self._group)
+        except ZyxelConnectionError as err:
+            _LOGGER.error("Rafraîchissement manuel '%s' échoué: %s", self._group, err)
         except Exception as err:
-            _LOGGER.error("Error refreshing data: %s", err)
+            _LOGGER.error("Erreur lors du rafraîchissement manuel '%s': %s", self._group, err)
