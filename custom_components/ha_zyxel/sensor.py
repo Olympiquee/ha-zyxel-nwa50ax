@@ -15,6 +15,7 @@ from homeassistant.const import (
 )
 
 from .const import DOMAIN
+from .entity_helpers import build_device_info, get_shared_state
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,37 +26,40 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Zyxel sensors from a config entry."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
-    
+    entry_data = hass.data[DOMAIN][config_entry.entry_id]
+    fast = entry_data["coordinator_fast"]
+    slow = entry_data["coordinator_slow"]
+    daily = entry_data["coordinator_daily"]
+
     sensors = [
-        # Système
-        ZyxelUptimeSensor(coordinator, config_entry),
-        ZyxelFirmwareSensor(coordinator, config_entry),
-        ZyxelLastSeenSensor(coordinator, config_entry),
-        
-        # Performance
-        ZyxelCPUSensor(coordinator, config_entry),
-        ZyxelCPU1MinSensor(coordinator, config_entry),
-        ZyxelCPU5MinSensor(coordinator, config_entry),
-        ZyxelMemorySensor(coordinator, config_entry),
-        
-        # Clients WiFi
-        ZyxelClientsSensor(coordinator, config_entry),
-        ZyxelClients24GHzSensor(coordinator, config_entry),
-        ZyxelClients5GHzSensor(coordinator, config_entry),
-        
-        # Port Ethernet
-        ZyxelPortStatusSensor(coordinator, config_entry),
-        ZyxelPortTxRateSensor(coordinator, config_entry),
-        ZyxelPortRxRateSensor(coordinator, config_entry),
-        ZyxelPortTxBytesSensor(coordinator, config_entry),
-        ZyxelPortRxBytesSensor(coordinator, config_entry),
-        
-        # Radio
-        ZyxelSlot1StatusSensor(coordinator, config_entry),
-        ZyxelSlot2StatusSensor(coordinator, config_entry),
+        # Système - la fraîcheur de "Last Seen" dépend des 3 groupes à la fois
+        ZyxelLastSeenSensor(hass, config_entry, [fast, slow, daily]),
+        ZyxelUptimeSensor(slow, config_entry),
+        ZyxelFirmwareSensor(daily, config_entry),
+
+        # Performance (groupe lent : ne change pas d'une minute à l'autre)
+        ZyxelCPUSensor(slow, config_entry),
+        ZyxelCPU1MinSensor(slow, config_entry),
+        ZyxelCPU5MinSensor(slow, config_entry),
+        ZyxelMemorySensor(slow, config_entry),
+
+        # Clients WiFi (groupe rapide : c'est ce qui varie le plus souvent)
+        ZyxelClientsSensor(fast, config_entry),
+        ZyxelClients24GHzSensor(fast, config_entry),
+        ZyxelClients5GHzSensor(fast, config_entry),
+
+        # Port Ethernet (groupe lent)
+        ZyxelPortStatusSensor(slow, config_entry),
+        ZyxelPortTxRateSensor(slow, config_entry),
+        ZyxelPortRxRateSensor(slow, config_entry),
+        ZyxelPortTxBytesSensor(slow, config_entry),
+        ZyxelPortRxBytesSensor(slow, config_entry),
+
+        # Radio (groupe rapide : doit refléter l'état réel rapidement)
+        ZyxelSlot1StatusSensor(fast, config_entry),
+        ZyxelSlot2StatusSensor(fast, config_entry),
     ]
-    
+
     async_add_entities(sensors)
 
 
@@ -70,15 +74,8 @@ class ZyxelBaseSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def device_info(self) -> dict[str, Any]:
-        """Return device information."""
-        device_data = self.coordinator.data.get("device_info", {})
-        return {
-            "identifiers": {(DOMAIN, self._config_entry.entry_id)},
-            "name": f"Zyxel {device_data.get('model', 'NWA50AX')}",
-            "manufacturer": "Zyxel",
-            "model": device_data.get("model", "NWA50AX"),
-            "sw_version": device_data.get("firmware", "Unknown"),
-        }
+        """Return device information (partagé, indépendant du coordinator)."""
+        return build_device_info(self.hass, self._config_entry.entry_id)
 
 
 # ============================================================================
@@ -100,15 +97,14 @@ class ZyxelUptimeSensor(ZyxelBaseSensor):
         """Return formatted uptime."""
         status = self.coordinator.data.get("status", {})
         uptime_seconds = status.get("uptime", 0)
-        
+
         if uptime_seconds == 0:
             return "0s"
-        
+
         days = uptime_seconds // 86400
         hours = (uptime_seconds % 86400) // 3600
         minutes = (uptime_seconds % 3600) // 60
-        
-        # Format lisible
+
         parts = []
         if days > 0:
             parts.append(f"{days}d")
@@ -116,7 +112,7 @@ class ZyxelUptimeSensor(ZyxelBaseSensor):
             parts.append(f"{hours}h")
         if minutes > 0 or (days == 0 and hours == 0):
             parts.append(f"{minutes}m")
-        
+
         return " ".join(parts)
 
     @property
@@ -124,12 +120,12 @@ class ZyxelUptimeSensor(ZyxelBaseSensor):
         """Return additional attributes."""
         status = self.coordinator.data.get("status", {})
         uptime_seconds = status.get("uptime", 0)
-        
+
         days = uptime_seconds // 86400
         hours = (uptime_seconds % 86400) // 3600
         minutes = (uptime_seconds % 3600) // 60
         seconds = uptime_seconds % 60
-        
+
         return {
             "uptime_seconds": uptime_seconds,
             "days": days,
@@ -163,43 +159,63 @@ class ZyxelFirmwareSensor(ZyxelBaseSensor):
         }
 
 
-class ZyxelLastSeenSensor(ZyxelBaseSensor):
-    """Sensor for last successful update."""
+class ZyxelLastSeenSensor(SensorEntity):
+    """Dernière communication réussie, tous groupes de rafraîchissement confondus.
+
+    Contrairement aux autres capteurs, celui-ci n'est PAS lié à un seul
+    coordinator : il s'abonne aux 3 (fast/slow/daily) et se met à jour dès que
+    l'un d'entre eux termine un cycle, réussi ou non.
+    """
 
     _attr_name = "Last Seen"
     _attr_icon = "mdi:clock-check-outline"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_has_entity_name = True
 
-    def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
+    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry, coordinators: list) -> None:
         """Initialize the sensor."""
-        super().__init__(coordinator, config_entry)
-        self._last_success_time = None
+        self.hass = hass
+        self._config_entry = config_entry
+        self._coordinators = coordinators
+        self._remove_listeners: list = []
+
+    async def async_added_to_hass(self) -> None:
+        """S'abonner aux 3 coordinators."""
+        for coordinator in self._coordinators:
+            self._remove_listeners.append(
+                coordinator.async_add_listener(self.async_write_ha_state)
+            )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Se désabonner proprement."""
+        for remove in self._remove_listeners:
+            remove()
+        self._remove_listeners.clear()
 
     @property
     def unique_id(self) -> str:
         return f"{self._config_entry.entry_id}_last_seen"
 
     @property
+    def device_info(self) -> dict[str, Any]:
+        return build_device_info(self.hass, self._config_entry.entry_id)
+
+    @property
     def native_value(self):
-        """Return timestamp of last successful update."""
-        # Mettre à jour le timestamp si la mise à jour a réussi
-        if self.coordinator.last_update_success:
-            from datetime import datetime
-            from homeassistant.util import dt as dt_util
-            self._last_success_time = dt_util.now()
-        return self._last_success_time
+        """Return timestamp of last successful update, tous groupes confondus."""
+        return get_shared_state(self.hass, self._config_entry.entry_id).get("last_seen")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional attributes."""
-        if self.coordinator.last_update_success:
-            return {
-                "status": "Online",
-                "description": "Dernière communication réussie avec l'AP",
-            }
+        online = any(c.last_update_success for c in self._coordinators)
         return {
-            "status": "Offline",
-            "description": "Aucune communication récente avec l'AP",
+            "status": "Online" if online else "Offline",
+            "description": (
+                "Au moins un groupe de rafraîchissement communique avec l'AP"
+                if online
+                else "Aucun groupe ne parvient à contacter l'AP"
+            ),
         }
 
 
@@ -230,11 +246,11 @@ class ZyxelCPUSensor(ZyxelBaseSensor):
         status = self.coordinator.data.get("status", {})
         cpu_data = status.get("cpu", {})
         cores = cpu_data.get("cores", [])
-        
+
         attrs = {}
         for i, core_usage in enumerate(cores):
             attrs[f"core_{i}"] = core_usage
-        
+
         return attrs
 
 
@@ -254,8 +270,7 @@ class ZyxelCPU1MinSensor(ZyxelBaseSensor):
     @property
     def native_value(self) -> int | None:
         status = self.coordinator.data.get("status", {})
-        cpu_data = status.get("cpu", {})
-        return cpu_data.get("avg_1min", 0)
+        return status.get("cpu", {}).get("avg_1min", 0)
 
 
 class ZyxelCPU5MinSensor(ZyxelBaseSensor):
@@ -274,8 +289,7 @@ class ZyxelCPU5MinSensor(ZyxelBaseSensor):
     @property
     def native_value(self) -> int | None:
         status = self.coordinator.data.get("status", {})
-        cpu_data = status.get("cpu", {})
-        return cpu_data.get("avg_5min", 0)
+        return status.get("cpu", {}).get("avg_5min", 0)
 
 
 class ZyxelMemorySensor(ZyxelBaseSensor):
@@ -320,18 +334,15 @@ class ZyxelClientsSensor(ZyxelBaseSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return detailed client information."""
         clients = self.coordinator.data.get("clients", [])
-        
-        # Compter par SSID
+
         ssid_counts = {}
         for client in clients:
             ssid = client.get("ssid", "Unknown")
             ssid_counts[ssid] = ssid_counts.get(ssid, 0) + 1
-        
-        # Compter par bande
+
         band_24ghz = sum(1 for c in clients if "2.4" in c.get("band", ""))
         band_5ghz = sum(1 for c in clients if "5" in c.get("band", ""))
-        
-        # Liste des clients avec infos essentielles
+
         client_list = []
         for client in clients:
             client_info = {
@@ -341,12 +352,11 @@ class ZyxelClientsSensor(ZyxelBaseSensor):
                 "band": client.get("band", "Unknown"),
                 "rssi_dbm": client.get("rssi_dbm", 0),
             }
-            # Ajouter hostname si disponible
             if client.get("hostname"):
                 client_info["hostname"] = client.get("hostname")
-            
+
             client_list.append(client_info)
-        
+
         return {
             "clients_2_4ghz": band_24ghz,
             "clients_5ghz": band_5ghz,
