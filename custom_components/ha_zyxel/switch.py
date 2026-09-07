@@ -1,4 +1,4 @@
-"""Switch platform for Zyxel integration - Guest SSID and Radio control."""
+"""Switch platform for Zyxel integration - Guest SSID, schedules SSID and Radio control."""
 import asyncio
 import logging
 from typing import Any
@@ -7,10 +7,10 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 
 from .const import DOMAIN
+from .entity_helpers import build_device_info
 from .zyxel_ssh_api import ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
@@ -18,7 +18,13 @@ _radio_locks: dict[str, asyncio.Lock] = {}
 
 
 class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
-    """Switch to control SSID schedule (enable/disable auto on/off)."""
+    """Switch to control a (non-Guest) SSID schedule (enable/disable auto on/off).
+
+    Rattaché au coordinator "lent" (le planning d'un SSID change rarement),
+    mais après une action manuelle, l'état vérifié est poussé immédiatement
+    via `async_set_updated_data` - pas besoin d'attendre le prochain cycle
+    lent pour voir le vrai état confirmé.
+    """
 
     def __init__(
         self,
@@ -32,18 +38,18 @@ class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
         self._api = api
         self._config_entry = config_entry
         self._ssid_name = ssid_name
-        self._attr_is_on = True  # Défaut: schedule actif (mode: yes)
         self._attr_unique_id = f"zyxel_{config_entry.entry_id}_ssid_schedule_{ssid_name.lower()}"
         self._attr_name = f"SSID {ssid_name} Schedule"
         self._attr_icon = "mdi:calendar-clock"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, config_entry.entry_id)},
-        )
 
     @property
-    def is_on(self) -> bool:
-        """Return true if SSID schedule is enabled."""
-        return self._attr_is_on
+    def device_info(self) -> dict[str, Any]:
+        return build_device_info(self.hass, self._config_entry.entry_id)
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return true if SSID schedule is enabled. None si pas encore connu."""
+        return self.coordinator.data.get("ssid_schedules", {}).get(self._ssid_name)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -59,9 +65,7 @@ class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
         _LOGGER.info("Enabling schedule for SSID %s", self._ssid_name)
         success = await self._api.async_toggle_ssid_schedule(self._ssid_name, enable=True)
         if success:
-            # Update état seulement si commande vérifiée
-            self._attr_is_on = True
-            self.async_write_ha_state()
+            self._push_confirmed_state(True)
             _LOGGER.info("SSID %s schedule enabled successfully", self._ssid_name)
         else:
             _LOGGER.error("Failed to enable schedule for SSID %s", self._ssid_name)
@@ -71,16 +75,31 @@ class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
         _LOGGER.info("Disabling schedule for SSID %s (always-on)", self._ssid_name)
         success = await self._api.async_toggle_ssid_schedule(self._ssid_name, enable=False)
         if success:
-            # Update état seulement si commande vérifiée
-            self._attr_is_on = False
-            self.async_write_ha_state()
+            self._push_confirmed_state(False)
             _LOGGER.info("SSID %s schedule disabled successfully (always-on)", self._ssid_name)
         else:
             _LOGGER.error("Failed to disable schedule for SSID %s", self._ssid_name)
 
+    def _push_confirmed_state(self, state: bool) -> None:
+        """Injecte l'état confirmé dans le coordinator lent, sans attendre son cycle.
+
+        `async_set_updated_data` (plutôt qu'une simple mutation + write_ha_state)
+        notifie aussi les autres entités qui liraient éventuellement la même
+        clé, et réarme le minuteur du coordinator lent à partir de maintenant.
+        """
+        self.coordinator.data.setdefault("ssid_schedules", {})[self._ssid_name] = state
+        self.coordinator.async_set_updated_data(self.coordinator.data)
+
 
 class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
-    """Switch to enable/disable Guest SSID."""
+    """Switch to enable/disable Guest SSID (toujours actif vs planning).
+
+    Réutilise le même mécanisme générique que ZyxelSSIDScheduleSwitch
+    (async_toggle_ssid_schedule), avec persistance NVRAM (persist=True) pour
+    conserver le comportement historique de cette intégration sur le SSID
+    Guest. Attention à l'inversion de sens : ON pour ce switch = SSID
+    toujours actif = schedule DÉSACTIVÉ (enable=False côté API).
+    """
 
     _attr_name = "Guest SSID"
     _attr_icon = "mdi:wifi"
@@ -91,7 +110,6 @@ class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
         super().__init__(coordinator)
         self._api = api
         self._config_entry = config_entry
-        self._attr_is_on = False
 
     @property
     def unique_id(self) -> str:
@@ -100,29 +118,23 @@ class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def device_info(self) -> dict[str, Any]:
-        """Return device information."""
-        device_data = self.coordinator.data.get("device_info", {})
-        return {
-            "identifiers": {(DOMAIN, self._config_entry.entry_id)},
-            "name": f"Zyxel {device_data.get('model', 'NWA50AX')}",
-            "manufacturer": "Zyxel",
-            "model": device_data.get("model", "NWA50AX"),
-            "sw_version": device_data.get("firmware", "Unknown"),
-        }
+        return build_device_info(self.hass, self._config_entry.entry_id)
 
     @property
-    def is_on(self) -> bool:
-        """Return true if Guest SSID is enabled (schedule disabled)."""
-        return self._attr_is_on
+    def is_on(self) -> bool | None:
+        """Return true if Guest SSID is enabled (schedule désactivé)."""
+        schedule_enabled = self.coordinator.data.get("ssid_schedules", {}).get("Guest")
+        if schedule_enabled is None:
+            return None
+        return not schedule_enabled
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the Guest SSID on (disable schedule = always active)."""
         _LOGGER.info("Enabling Guest SSID (disabling schedule)")
         try:
-            success = await self._api.async_toggle_guest_ssid(enable=True)
+            success = await self._api.async_toggle_ssid_schedule("Guest", enable=False, persist=True)
             if success:
-                self._attr_is_on = True
-                self.async_write_ha_state()
+                self._push_confirmed_state(schedule_enabled=False)
                 _LOGGER.info("Guest SSID enabled successfully")
             else:
                 _LOGGER.error("Failed to enable Guest SSID")
@@ -133,15 +145,18 @@ class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
         """Turn the Guest SSID off (enable schedule = follow configured hours)."""
         _LOGGER.info("Disabling Guest SSID (enabling schedule)")
         try:
-            success = await self._api.async_toggle_guest_ssid(enable=False)
+            success = await self._api.async_toggle_ssid_schedule("Guest", enable=True, persist=True)
             if success:
-                self._attr_is_on = False
-                self.async_write_ha_state()
+                self._push_confirmed_state(schedule_enabled=True)
                 _LOGGER.info("Guest SSID disabled successfully (following schedule)")
             else:
                 _LOGGER.error("Failed to disable Guest SSID")
         except Exception as err:
             _LOGGER.error("Error disabling Guest SSID: %s", err)
+
+    def _push_confirmed_state(self, schedule_enabled: bool) -> None:
+        self.coordinator.data.setdefault("ssid_schedules", {})["Guest"] = schedule_enabled
+        self.coordinator.async_set_updated_data(self.coordinator.data)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -164,8 +179,7 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
         super().__init__(coordinator)
         self._api = api
         self._config_entry = config_entry
-        
-        # Lock global pour TOUTES les opérations radio
+
         lock_key = f"{config_entry.entry_id}_radio"
         if lock_key not in _radio_locks:
             _radio_locks[lock_key] = asyncio.Lock()
@@ -178,15 +192,7 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def device_info(self) -> dict[str, Any]:
-        """Return device information."""
-        device_data = self.coordinator.data.get("device_info", {})
-        return {
-            "identifiers": {(DOMAIN, self._config_entry.entry_id)},
-            "name": f"Zyxel {device_data.get('model', 'NWA50AX')}",
-            "manufacturer": "Zyxel",
-            "model": device_data.get("model", "NWA50AX"),
-            "sw_version": device_data.get("firmware", "Unknown"),
-        }
+        return build_device_info(self.hass, self._config_entry.entry_id)
 
     @property
     def is_on(self) -> bool:
@@ -205,9 +211,7 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
             try:
                 success = await self._api.async_toggle_radio(slot=1, enable=True)
                 if success:
-                    # Injecter dans coordinator pour mise à jour immédiate
-                    self.coordinator.data.setdefault("radio", {})["slot1_active"] = True
-                    self.async_write_ha_state()
+                    self._push_confirmed_state(True)
                     _LOGGER.info("2.4GHz radio activated successfully")
                 else:
                     _LOGGER.error("Failed to activate 2.4GHz radio after all attempts")
@@ -220,19 +224,21 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
             _LOGGER.warning("A radio toggle is already in progress, please wait")
             return
 
-        _LOGGER.info("Deactivating 2.4GHz radio (this may take up to 3 minutes)")
+        _LOGGER.info("Deactivating 2.4GHz radio")
         async with self._lock:
             try:
                 success = await self._api.async_toggle_radio(slot=1, enable=False)
                 if success:
-                    # Injecter dans coordinator pour mise à jour immédiate
-                    self.coordinator.data.setdefault("radio", {})["slot1_active"] = False
-                    self.async_write_ha_state()
+                    self._push_confirmed_state(False)
                     _LOGGER.info("2.4GHz radio deactivated successfully")
                 else:
                     _LOGGER.error("Failed to deactivate 2.4GHz radio after all attempts")
             except Exception as err:
                 _LOGGER.error("Error deactivating 2.4GHz radio: %s", err)
+
+    def _push_confirmed_state(self, state: bool) -> None:
+        self.coordinator.data.setdefault("radio", {})["slot1_active"] = state
+        self.coordinator.async_set_updated_data(self.coordinator.data)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -242,7 +248,7 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
             "band": radio.get("slot1_band", "Unknown"),
             "ssids": ", ".join(radio.get("slot1_ssids", [])),
             "description": "Contrôle la radio WiFi 2.4GHz (slot1)",
-            "note": "Désactivation ~15s, Activation ~40-60s (attend AP responsive)",
+            "note": "Désactivation ~5-10s (session unique), Activation ~40-60s (redémarrage matériel)",
         }
 
 
@@ -258,8 +264,7 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
         super().__init__(coordinator)
         self._api = api
         self._config_entry = config_entry
-        
-        # Lock global pour TOUTES les opérations radio (même que 2.4G)
+
         lock_key = f"{config_entry.entry_id}_radio"
         if lock_key not in _radio_locks:
             _radio_locks[lock_key] = asyncio.Lock()
@@ -272,15 +277,7 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def device_info(self) -> dict[str, Any]:
-        """Return device information."""
-        device_data = self.coordinator.data.get("device_info", {})
-        return {
-            "identifiers": {(DOMAIN, self._config_entry.entry_id)},
-            "name": f"Zyxel {device_data.get('model', 'NWA50AX')}",
-            "manufacturer": "Zyxel",
-            "model": device_data.get("model", "NWA50AX"),
-            "sw_version": device_data.get("firmware", "Unknown"),
-        }
+        return build_device_info(self.hass, self._config_entry.entry_id)
 
     @property
     def is_on(self) -> bool:
@@ -299,9 +296,7 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
             try:
                 success = await self._api.async_toggle_radio(slot=2, enable=True)
                 if success:
-                    # Injecter dans coordinator pour mise à jour immédiate
-                    self.coordinator.data.setdefault("radio", {})["slot2_active"] = True
-                    self.async_write_ha_state()
+                    self._push_confirmed_state(True)
                     _LOGGER.info("5GHz radio activated successfully")
                 else:
                     _LOGGER.error("Failed to activate 5GHz radio after all attempts")
@@ -314,19 +309,21 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
             _LOGGER.warning("A radio toggle is already in progress, please wait")
             return
 
-        _LOGGER.info("Deactivating 5GHz radio (this may take up to 3 minutes)")
+        _LOGGER.info("Deactivating 5GHz radio")
         async with self._lock:
             try:
                 success = await self._api.async_toggle_radio(slot=2, enable=False)
                 if success:
-                    # Injecter dans coordinator pour mise à jour immédiate
-                    self.coordinator.data.setdefault("radio", {})["slot2_active"] = False
-                    self.async_write_ha_state()
+                    self._push_confirmed_state(False)
                     _LOGGER.info("5GHz radio deactivated successfully")
                 else:
                     _LOGGER.error("Failed to deactivate 5GHz radio after all attempts")
             except Exception as err:
                 _LOGGER.error("Error deactivating 5GHz radio: %s", err)
+
+    def _push_confirmed_state(self, state: bool) -> None:
+        self.coordinator.data.setdefault("radio", {})["slot2_active"] = state
+        self.coordinator.async_set_updated_data(self.coordinator.data)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -336,7 +333,7 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
             "band": radio.get("slot2_band", "Unknown"),
             "ssids": ", ".join(radio.get("slot2_ssids", [])),
             "description": "Contrôle la radio WiFi 5GHz (slot2)",
-            "note": "Désactivation ~15s, Activation ~40-60s (attend AP responsive)",
+            "note": "Désactivation ~5-10s (session unique), Activation ~40-60s (redémarrage matériel)",
         }
 
 
@@ -346,26 +343,28 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Zyxel switches."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    api = hass.data[DOMAIN][entry.entry_id]["api"]
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    fast = entry_data["coordinator_fast"]
+    slow = entry_data["coordinator_slow"]
+    api = entry_data["api"]
 
     entities = [
-        ZyxelGuestSSIDSwitch(coordinator, api, entry),
-        ZyxelRadio24GSwitch(coordinator, api, entry),
-        ZyxelRadio5GSwitch(coordinator, api, entry),
+        ZyxelGuestSSIDSwitch(slow, api, entry),
+        ZyxelRadio24GSwitch(fast, api, entry),
+        ZyxelRadio5GSwitch(fast, api, entry),
     ]
-    
-    # Auto-détection des SSIDs pour créer switches schedule
+
+    # Auto-détection des SSIDs (depuis le cache déjà alimenté par le premier
+    # refresh "fast" effectué dans __init__.py avant l'appel à cette fonction)
     try:
         ssid_list = await api.async_get_ssid_list()
         _LOGGER.info("Creating SSID schedule switches for: %s", ssid_list)
-        
+
         for ssid_name in ssid_list:
-            # Skip "Guest" car déjà géré par ZyxelGuestSSIDSwitch
             if ssid_name.lower() == "guest":
-                continue
-            entities.append(ZyxelSSIDScheduleSwitch(coordinator, api, entry, ssid_name))
-            
+                continue  # déjà géré par ZyxelGuestSSIDSwitch
+            entities.append(ZyxelSSIDScheduleSwitch(slow, api, entry, ssid_name))
+
     except Exception as err:
         _LOGGER.error("Failed to auto-detect SSIDs, skipping schedule switches: %s", err)
 
