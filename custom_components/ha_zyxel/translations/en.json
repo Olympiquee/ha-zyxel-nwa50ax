@@ -23,11 +23,40 @@
     "step": {
       "init": {
         "title": "Zyxel NWA50AX Options",
-        "description": "Refresh groups: Fast = radios + connected clients. Slow = CPU/RAM/interfaces/port + SSID schedules. Daily = model/firmware. A MikroTik connection is optional and only used to resolve device hostnames from DHCP leases - fully decoupled from the Zyxel AP connection.",
+        "menu_options": {
+          "intervals": "Refresh intervals",
+          "data_groups": "Data assignment (fast/slow/daily)",
+          "mikrotik": "MikroTik hostname resolver"
+        }
+      },
+      "intervals": {
+        "title": "Refresh intervals",
+        "description": "How often each group is refreshed. Which data belongs to which group is set separately, in \"Data assignment\".",
         "data": {
           "fast_interval": "Fast group interval (seconds)",
           "slow_interval": "Slow group interval (seconds)",
-          "daily_interval": "Daily group interval (seconds)",
+          "daily_interval": "Daily group interval (seconds)"
+        }
+      },
+      "data_groups": {
+        "title": "Data assignment",
+        "description": "Choose which refresh group (Fast / Slow / Daily) each family of data belongs to. Defaults match the recommended split; change any of them freely.",
+        "data": {
+          "item_group_radio": "Radio state (2.4GHz / 5GHz)",
+          "item_group_clients": "Connected WiFi clients",
+          "item_group_cpu": "CPU usage",
+          "item_group_memory": "Memory usage",
+          "item_group_uptime": "Uptime",
+          "item_group_interfaces": "Network interfaces",
+          "item_group_port": "Ethernet port",
+          "item_group_ssid_schedules": "SSID schedules (incl. Guest)",
+          "item_group_device_info": "Model / firmware"
+        }
+      },
+      "mikrotik": {
+        "title": "MikroTik hostname resolver",
+        "description": "Optional. Resolves device hostnames from MikroTik DHCP leases - fully decoupled from the Zyxel AP connection (its own connection, its own cycle, its own cache).",
+        "data": {
           "mikrotik_enabled": "Enable MikroTik hostname resolver",
           "mikrotik_host": "MikroTik IP address",
           "mikrotik_username": "MikroTik username",
