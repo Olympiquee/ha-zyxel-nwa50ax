@@ -14,6 +14,7 @@ from .const import (
     CONF_DAILY_INTERVAL,
     CONF_FAST_INTERVAL,
     CONF_HOST,
+    CONF_ITEM_GROUP_PREFIX,
     CONF_MIKROTIK_ENABLED,
     CONF_MIKROTIK_HOST,
     CONF_MIKROTIK_PASSWORD,
@@ -22,18 +23,24 @@ from .const import (
     CONF_PASSWORD,
     CONF_SLOW_INTERVAL,
     CONF_USERNAME,
+    DATA_ITEM_CLIENTS,
+    DATA_ITEMS,
     DEFAULT_DAILY_INTERVAL,
     DEFAULT_FAST_INTERVAL,
+    DEFAULT_ITEM_GROUPS,
     DEFAULT_MIKROTIK_REFRESH_INTERVAL,
     DEFAULT_SLOW_INTERVAL,
     DOMAIN,
+    PRESENCE_GRACE_MIN_SECONDS,
+    PRESENCE_GRACE_MULTIPLIER,
 )
 from .mikrotik_resolver import MikrotikHostnameResolver
+from .presence import PresenceTracker
 from .zyxel_ssh_api import ZyxelConnectionError, ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.BUTTON]
+PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.BUTTON, Platform.DEVICE_TRACKER]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -45,8 +52,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     fast_interval = entry.options.get(CONF_FAST_INTERVAL, DEFAULT_FAST_INTERVAL)
     slow_interval = entry.options.get(CONF_SLOW_INTERVAL, DEFAULT_SLOW_INTERVAL)
     daily_interval = entry.options.get(CONF_DAILY_INTERVAL, DEFAULT_DAILY_INTERVAL)
+    group_intervals = {"fast": fast_interval, "slow": slow_interval, "daily": daily_interval}
+
+    # Répartition des données entre groupes - configurable depuis les options
+    # ("Répartition des données"). Chaque item absent des options garde
+    # l'affectation par défaut (le tri qu'on a défini ensemble).
+    item_groups = {
+        item: entry.options.get(f"{CONF_ITEM_GROUP_PREFIX}{item}", DEFAULT_ITEM_GROUPS[item])
+        for item in DATA_ITEMS
+    }
 
     api = ZyxelSSHAPI(host, username, password)
+    api.set_item_groups(item_groups)
 
     if not await api.async_connect():
         raise ConfigEntryNotReady(f"Cannot connect to {host}")
@@ -54,6 +71,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # État partagé entre TOUTES les entités, indépendamment de quel coordinator
     # (fast/slow/daily) les alimente par ailleurs - voir entity_helpers.py.
     shared_state = {"device_info": {}, "last_seen": None}
+
+    # Présence WiFi (device_tracker) - cache mémoire séparé, avec délai de
+    # grâce anti-flapping (voir presence.py). Le délai se base sur l'intervalle
+    # du groupe qui gère RÉELLEMENT "clients" (pas forcément "fast" si
+    # l'utilisateur l'a réaffecté ailleurs).
+    clients_group = item_groups.get(DATA_ITEM_CLIENTS, DEFAULT_ITEM_GROUPS[DATA_ITEM_CLIENTS])
+    presence_tracker = PresenceTracker(
+        grace_period=max(
+            PRESENCE_GRACE_MULTIPLIER * group_intervals[clients_group], PRESENCE_GRACE_MIN_SECONDS
+        )
+    )
 
     def _touch_last_seen() -> None:
         shared_state["last_seen"] = dt_util.now()
@@ -70,7 +98,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 raise UpdateFailed(f"Erreur communication AP ({group}): {err}") from err
 
             _touch_last_seen()
-            if group == "daily" and data.get("device_info"):
+            # Piloté par la PRÉSENCE des données, pas par le nom du groupe :
+            # "clients"/"device_info" peuvent avoir été réaffectés par
+            # l'utilisateur à n'importe quel groupe.
+            if "clients" in data:
+                presence_tracker.update(data["clients"])
+            if data.get("device_info"):
                 shared_state["device_info"] = data["device_info"]
             return data
 
@@ -91,10 +124,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_method=_make_update_method("daily"),
         update_interval=timedelta(seconds=daily_interval),
     )
+    coordinators_by_group = {"fast": coordinator_fast, "slow": coordinator_slow, "daily": coordinator_daily}
+
+    # Coordinator à utiliser par les entités pour CHAQUE item - c'est ce qui
+    # rend la réaffectation utilisateur transparente pour sensor.py/switch.py/
+    # device_tracker.py : ils ne référencent plus jamais "coordinator_slow" en
+    # dur, seulement "le coordinator qui gère actuellement l'item X".
+    coordinator_for_item = {item: coordinators_by_group[item_groups[item]] for item in DATA_ITEMS}
 
     # Premier refresh séquentiel, avec un peu d'attente entre chacun.
-    # Le groupe "daily" passe en premier car il alimente device_info (nom de
-    # l'appareil dans le device registry HA) et sa commande unique est rapide.
+    # Le groupe "daily" passe en premier car il porte historiquement
+    # device_info (nom de l'appareil dans le device registry HA) et sa
+    # commande unique est rapide - même si l'utilisateur l'a réaffecté, ça
+    # reste un ordre de démarrage raisonnable.
     await coordinator_daily.async_config_entry_first_refresh()
     await asyncio.sleep(2)
     await coordinator_fast.async_config_entry_first_refresh()
@@ -132,8 +174,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator_fast": coordinator_fast,
         "coordinator_slow": coordinator_slow,
         "coordinator_daily": coordinator_daily,
+        "coordinator_for_item": coordinator_for_item,
+        "item_groups": item_groups,
         "shared_state": shared_state,
+        "presence_tracker": presence_tracker,
         "resolver": resolver,
+        "unsub_listeners": [],
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -152,6 +198,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data = hass.data[DOMAIN].pop(entry.entry_id)
         api: ZyxelSSHAPI = data["api"]
         await api.async_disconnect()
+
+        for unsub in data.get("unsub_listeners", []):
+            unsub()
 
         resolver = data.get("resolver")
         if resolver:
