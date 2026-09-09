@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 
-from .const import DOMAIN
+from .const import DATA_ITEM_RADIO, DATA_ITEM_SSID_SCHEDULES, DOMAIN
 from .entity_helpers import build_device_info
 from .zyxel_ssh_api import ZyxelSSHAPI
 
@@ -344,18 +344,20 @@ async def async_setup_entry(
 ) -> None:
     """Set up Zyxel switches."""
     entry_data = hass.data[DOMAIN][entry.entry_id]
-    fast = entry_data["coordinator_fast"]
-    slow = entry_data["coordinator_slow"]
+    by_item = entry_data["coordinator_for_item"]
+    radio_coordinator = by_item[DATA_ITEM_RADIO]
+    ssid_coordinator = by_item[DATA_ITEM_SSID_SCHEDULES]
     api = entry_data["api"]
 
     entities = [
-        ZyxelGuestSSIDSwitch(slow, api, entry),
-        ZyxelRadio24GSwitch(fast, api, entry),
-        ZyxelRadio5GSwitch(fast, api, entry),
+        ZyxelGuestSSIDSwitch(ssid_coordinator, api, entry),
+        ZyxelRadio24GSwitch(radio_coordinator, api, entry),
+        ZyxelRadio5GSwitch(radio_coordinator, api, entry),
     ]
 
     # Auto-détection des SSIDs (depuis le cache déjà alimenté par le premier
-    # refresh "fast" effectué dans __init__.py avant l'appel à cette fonction)
+    # refresh de l'item "radio" effectué dans __init__.py avant l'appel à
+    # cette fonction, quel que soit le groupe auquel il est affecté)
     try:
         ssid_list = await api.async_get_ssid_list()
         _LOGGER.info("Creating SSID schedule switches for: %s", ssid_list)
@@ -363,7 +365,7 @@ async def async_setup_entry(
         for ssid_name in ssid_list:
             if ssid_name.lower() == "guest":
                 continue  # déjà géré par ZyxelGuestSSIDSwitch
-            entities.append(ZyxelSSIDScheduleSwitch(slow, api, entry, ssid_name))
+            entities.append(ZyxelSSIDScheduleSwitch(ssid_coordinator, api, entry, ssid_name))
 
     except Exception as err:
         _LOGGER.error("Failed to auto-detect SSIDs, skipping schedule switches: %s", err)
