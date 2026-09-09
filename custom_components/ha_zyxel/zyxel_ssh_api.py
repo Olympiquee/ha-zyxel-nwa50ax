@@ -21,6 +21,7 @@ import asyncio
 import logging
 import re
 import time
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from .const import (
@@ -32,6 +33,17 @@ from .const import (
     PRIORITY_WRITE,
     BACKOFF_BASE_SECONDS,
     BACKOFF_MAX_SECONDS,
+    DATA_ITEMS,
+    DATA_ITEM_CLIENTS,
+    DATA_ITEM_CPU,
+    DATA_ITEM_DEVICE_INFO,
+    DATA_ITEM_INTERFACES,
+    DATA_ITEM_MEMORY,
+    DATA_ITEM_PORT,
+    DATA_ITEM_RADIO,
+    DATA_ITEM_SSID_SCHEDULES,
+    DATA_ITEM_UPTIME,
+    DEFAULT_ITEM_GROUPS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,18 +57,20 @@ except ImportError:
     _LOGGER.error("paramiko not installed. Please install: pip install paramiko")
 
 
-# Commandes de lecture par groupe. Les schedules SSID sont ajoutés
-# dynamiquement au groupe "slow" en fonction des SSIDs détectés par le
-# groupe "fast" (voir _async_get_slow_data_direct).
-FAST_COMMANDS = ["show wlan all", "show wireless-hal station info"]
-SLOW_BASE_COMMANDS = [
-    "show cpu all",
-    "show mem status",
-    "show system uptime",
-    "show interface all",
-    "show port status",
-]
-DAILY_COMMANDS = ["show version"]
+@dataclass
+class _DataItemSpec:
+    """Définition d'un item de données : comment le demander et le parser.
+
+    `build_commands` est un callable à zéro argument (généralement une lambda
+    fermée sur `self`) plutôt qu'une simple liste, car certains items sont
+    dynamiques (les schedules SSID dépendent du nombre de SSIDs actuellement
+    connus, qui peut changer d'un cycle à l'autre).
+    """
+
+    build_commands: Callable[[], list[str]]
+    settle_delay: float
+    apply: Callable[[dict, list[str]], None]
+
 
 GROUP_PRIORITIES = {
     "fast": PRIORITY_FAST,
@@ -94,9 +108,15 @@ class ZyxelSSHAPI:
         self._consecutive_failures = 0
         self._backoff_until = 0.0
 
-        # Cache des SSIDs connus, alimenté par le groupe "fast" (show wlan all).
-        # Évite une commande SSH dédiée pour la détection des switches SSID.
+        # Cache des SSIDs connus, alimenté par l'item "radio" (show wlan all),
+        # quel que soit le groupe auquel cet item est actuellement affecté.
         self._known_ssids: list[str] = []
+
+        # Répartition des données entre groupes fast/slow/daily - modifiable
+        # depuis les options HA via set_item_groups(). Par défaut : le tri
+        # qu'on a défini ensemble (voir const.DEFAULT_ITEM_GROUPS).
+        self._item_groups: dict[str, str] = dict(DEFAULT_ITEM_GROUPS)
+        self._item_registry: dict[str, _DataItemSpec] = self._build_item_registry()
 
         # Résolveur de nom d'appareil externe (MAC/IP -> hostname), branché par
         # __init__.py si configuré. Doit être synchrone et non bloquant.
@@ -420,12 +440,7 @@ class ZyxelSSHAPI:
         alors devant les cycles automatiques (priorité 1 au lieu de 2/3/4), et
         n'est PAS soumise au backoff (contrairement aux cycles automatiques).
         """
-        fetchers = {
-            "fast": self._async_get_fast_data_direct,
-            "slow": self._async_get_slow_data_direct,
-            "daily": self._async_get_daily_data_direct,
-        }
-        if group not in fetchers:
+        if group not in GROUP_PRIORITIES:
             raise ValueError(f"Groupe de rafraîchissement inconnu: {group}")
 
         if not manual and self._is_in_backoff():
@@ -440,7 +455,9 @@ class ZyxelSSHAPI:
 
         priority = PRIORITY_MANUAL if manual else GROUP_PRIORITIES[group]
         task = asyncio.create_task(
-            self._queue_ssh_operation(priority, f"refresh:{group}", fetchers[group])
+            self._queue_ssh_operation(
+                priority, f"refresh:{group}", lambda: self._async_get_group_data_direct(group)
+            )
         )
         self._pending_group_refresh[group] = task
         try:
@@ -449,75 +466,141 @@ class ZyxelSSHAPI:
             if self._pending_group_refresh.get(group) is task:
                 del self._pending_group_refresh[group]
 
-    async def _async_get_fast_data_direct(self) -> dict[str, Any]:
-        """Groupe rapide : état des radios + clients connectés."""
-        data: dict[str, Any] = {"clients": [], "radio": {}}
+    def set_item_groups(self, item_groups: dict[str, str]) -> None:
+        """Définit la répartition des données entre groupes fast/slow/daily.
 
-        outputs = await self._async_execute_session_direct(
-            FAST_COMMANDS, settle_delays=[2.5, 2.5]
-        )
+        Configurable depuis les options de l'intégration côté HA. Les items
+        absents de `item_groups` gardent leur affectation par défaut.
+        """
+        merged = dict(DEFAULT_ITEM_GROUPS)
+        merged.update({k: v for k, v in (item_groups or {}).items() if v in GROUP_PRIORITIES})
+        self._item_groups = merged
+        _LOGGER.debug("Répartition des données mise à jour: %s", self._item_groups)
+
+    def get_item_groups(self) -> dict[str, str]:
+        """Copie de la répartition actuelle des données entre groupes."""
+        return dict(self._item_groups)
+
+    async def _async_get_group_data_direct(self, group: str) -> dict[str, Any]:
+        """Récupère, en UNE session SSH, tous les items actuellement affectés à `group`.
+
+        Générique et piloté par `self._item_groups` / `self._item_registry` :
+        aucune commande n'est câblée en dur ici, tout vient de la table
+        construite dans `_build_item_registry()`.
+        """
+        items_in_group = [
+            item for item in DATA_ITEMS
+            if self._item_groups.get(item, DEFAULT_ITEM_GROUPS[item]) == group
+        ]
+
+        commands: list[str] = []
+        settle_delays: list[float] = []
+        spans: list[tuple[str, int, int]] = []
+
+        for item_key in items_in_group:
+            spec = self._item_registry[item_key]
+            cmds = spec.build_commands()
+            start = len(commands)
+            if cmds:
+                commands.extend(cmds)
+                settle_delays.extend([spec.settle_delay] * len(cmds))
+            # Span à vide (start == start) si cet item n'a rien à demander ce
+            # coup-ci (ex: schedules SSID avant le tout premier cycle radio) -
+            # son apply() sera quand même appelé avec une liste vide plus bas,
+            # pour que ses valeurs par défaut ({} plutôt qu'absent) restent
+            # cohérentes, sans pour autant ouvrir de session pour rien.
+            spans.append((item_key, start, start + len(cmds)))
+
+        if not commands:
+            data: dict[str, Any] = {}
+            for item_key, start, end in spans:
+                self._item_registry[item_key].apply(data, [])
+            return data
+
+        outputs = await self._async_execute_session_direct(commands, settle_delays=settle_delays)
         if outputs is None:
-            raise ZyxelConnectionError("Impossible de contacter l'AP (groupe rapide)")
+            raise ZyxelConnectionError(f"Impossible de contacter l'AP (groupe {group})")
 
-        wlan_output, clients_output = outputs
+        data: dict[str, Any] = {}
+        for item_key, start, end in spans:
+            self._item_registry[item_key].apply(data, outputs[start:end])
 
-        if wlan_output:
-            data["radio"] = self._parse_wlan(wlan_output)
+        return data
+
+    def _build_item_registry(self) -> dict[str, "_DataItemSpec"]:
+        """Construit la table item -> (commandes, délai, parseur).
+
+        C'est la SEULE source de vérité pour "quelle(s) commande(s) pour quel
+        item, et comment en extraire les données" - `_async_get_group_data_direct`
+        ne fait qu'assembler ce que cette table lui donne, quel que soit le
+        groupe auquel chaque item est actuellement affecté.
+        """
+
+        def _apply_radio(data: dict, outputs: list[str]) -> None:
+            output = outputs[0] if outputs else ""
+            if not output:
+                return
+            data["radio"] = self._parse_wlan(output)
             self._known_ssids = sorted(
                 {s for s in data["radio"].get("slot1_ssids", []) if s}
                 | {s for s in data["radio"].get("slot2_ssids", []) if s}
             )
 
-        if clients_output:
-            data["clients"] = self._parse_clients(clients_output)
-
-        return data
-
-    async def _async_get_slow_data_direct(self) -> dict[str, Any]:
-        """Groupe lent : CPU/RAM/uptime/interfaces/port + schedules SSID."""
-        data: dict[str, Any] = {"status": {}, "network": {}, "ssid_schedules": {}}
-
-        ssid_names = list(self._known_ssids)
-        commands = list(SLOW_BASE_COMMANDS) + [
-            f"show wlan-ssid-profile {name}" for name in ssid_names
-        ]
-        settle_delays = [1.5] * len(SLOW_BASE_COMMANDS) + [1.5] * len(ssid_names)
-
-        outputs = await self._async_execute_session_direct(commands, settle_delays=settle_delays)
-        if outputs is None:
-            raise ZyxelConnectionError("Impossible de contacter l'AP (groupe lent)")
-
-        cpu_out, mem_out, uptime_out, iface_out, port_out, *ssid_outputs = outputs
-
-        if cpu_out:
-            data["status"]["cpu"] = self._parse_cpu(cpu_out)
-        if mem_out:
-            data["status"]["memory"] = self._parse_memory(mem_out)
-        if uptime_out:
-            data["status"]["uptime"] = self._parse_uptime(uptime_out)
-        if iface_out:
-            data["network"] = self._parse_interfaces(iface_out)
-        if port_out:
-            data.setdefault("network", {})["port"] = self._parse_port_status(port_out)
-
-        for name, output in zip(ssid_names, ssid_outputs):
+        def _apply_clients(data: dict, outputs: list[str]) -> None:
+            output = outputs[0] if outputs else ""
             if output:
-                data["ssid_schedules"][name] = self._parse_ssid_schedule_mode(output)
+                data["clients"] = self._parse_clients(output)
 
-        return data
+        def _apply_cpu(data: dict, outputs: list[str]) -> None:
+            if outputs and outputs[0]:
+                data.setdefault("status", {})["cpu"] = self._parse_cpu(outputs[0])
 
-    async def _async_get_daily_data_direct(self) -> dict[str, Any]:
-        """Groupe quotidien : modèle / firmware / build date."""
-        data: dict[str, Any] = {"device_info": {}}
+        def _apply_memory(data: dict, outputs: list[str]) -> None:
+            if outputs and outputs[0]:
+                data.setdefault("status", {})["memory"] = self._parse_memory(outputs[0])
 
-        outputs = await self._async_execute_session_direct(DAILY_COMMANDS, settle_delays=[1.5])
-        if outputs is None:
-            raise ZyxelConnectionError("Impossible de contacter l'AP (groupe quotidien)")
+        def _apply_uptime(data: dict, outputs: list[str]) -> None:
+            if outputs and outputs[0]:
+                data.setdefault("status", {})["uptime"] = self._parse_uptime(outputs[0])
 
-        if outputs[0]:
-            data["device_info"] = self._parse_version(outputs[0])
+        def _apply_interfaces(data: dict, outputs: list[str]) -> None:
+            if outputs and outputs[0]:
+                data.setdefault("network", {}).update(self._parse_interfaces(outputs[0]))
 
-        return data
+        def _apply_port(data: dict, outputs: list[str]) -> None:
+            if outputs and outputs[0]:
+                data.setdefault("network", {})["port"] = self._parse_port_status(outputs[0])
+
+        def _apply_ssid_schedules(data: dict, outputs: list[str]) -> None:
+            schedules = {}
+            for name, output in zip(self._known_ssids, outputs):
+                if output:
+                    schedules[name] = self._parse_ssid_schedule_mode(output)
+            data["ssid_schedules"] = schedules
+
+        def _apply_device_info(data: dict, outputs: list[str]) -> None:
+            if outputs and outputs[0]:
+                data["device_info"] = self._parse_version(outputs[0])
+
+        return {
+            DATA_ITEM_RADIO: _DataItemSpec(lambda: ["show wlan all"], 2.5, _apply_radio),
+            DATA_ITEM_CLIENTS: _DataItemSpec(
+                lambda: ["show wireless-hal station info"], 2.5, _apply_clients
+            ),
+            DATA_ITEM_CPU: _DataItemSpec(lambda: ["show cpu all"], 1.5, _apply_cpu),
+            DATA_ITEM_MEMORY: _DataItemSpec(lambda: ["show mem status"], 1.5, _apply_memory),
+            DATA_ITEM_UPTIME: _DataItemSpec(lambda: ["show system uptime"], 1.5, _apply_uptime),
+            DATA_ITEM_INTERFACES: _DataItemSpec(
+                lambda: ["show interface all"], 1.5, _apply_interfaces
+            ),
+            DATA_ITEM_PORT: _DataItemSpec(lambda: ["show port status"], 1.5, _apply_port),
+            DATA_ITEM_SSID_SCHEDULES: _DataItemSpec(
+                lambda: [f"show wlan-ssid-profile {name}" for name in self._known_ssids],
+                1.5,
+                _apply_ssid_schedules,
+            ),
+            DATA_ITEM_DEVICE_INFO: _DataItemSpec(lambda: ["show version"], 1.5, _apply_device_info),
+        }
 
     # ------------------------------------------------------------------
     # Parsing
