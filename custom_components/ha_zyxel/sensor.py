@@ -14,7 +14,16 @@ from homeassistant.const import (
     UnitOfDataRate,
 )
 
-from .const import DOMAIN
+from .const import (
+    DATA_ITEM_CLIENTS,
+    DATA_ITEM_CPU,
+    DATA_ITEM_DEVICE_INFO,
+    DATA_ITEM_MEMORY,
+    DATA_ITEM_PORT,
+    DATA_ITEM_RADIO,
+    DATA_ITEM_UPTIME,
+    DOMAIN,
+)
 from .entity_helpers import build_device_info, get_shared_state
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,34 +39,35 @@ async def async_setup_entry(
     fast = entry_data["coordinator_fast"]
     slow = entry_data["coordinator_slow"]
     daily = entry_data["coordinator_daily"]
+    by_item = entry_data["coordinator_for_item"]
 
     sensors = [
         # Système - la fraîcheur de "Last Seen" dépend des 3 groupes à la fois
         ZyxelLastSeenSensor(hass, config_entry, [fast, slow, daily]),
-        ZyxelUptimeSensor(slow, config_entry),
-        ZyxelFirmwareSensor(daily, config_entry),
+        ZyxelUptimeSensor(by_item[DATA_ITEM_UPTIME], config_entry),
+        ZyxelFirmwareSensor(by_item[DATA_ITEM_DEVICE_INFO], config_entry),
 
-        # Performance (groupe lent : ne change pas d'une minute à l'autre)
-        ZyxelCPUSensor(slow, config_entry),
-        ZyxelCPU1MinSensor(slow, config_entry),
-        ZyxelCPU5MinSensor(slow, config_entry),
-        ZyxelMemorySensor(slow, config_entry),
+        # Performance
+        ZyxelCPUSensor(by_item[DATA_ITEM_CPU], config_entry),
+        ZyxelCPU1MinSensor(by_item[DATA_ITEM_CPU], config_entry),
+        ZyxelCPU5MinSensor(by_item[DATA_ITEM_CPU], config_entry),
+        ZyxelMemorySensor(by_item[DATA_ITEM_MEMORY], config_entry),
 
-        # Clients WiFi (groupe rapide : c'est ce qui varie le plus souvent)
-        ZyxelClientsSensor(fast, config_entry),
-        ZyxelClients24GHzSensor(fast, config_entry),
-        ZyxelClients5GHzSensor(fast, config_entry),
+        # Clients WiFi
+        ZyxelClientsSensor(by_item[DATA_ITEM_CLIENTS], config_entry),
+        ZyxelClients24GHzSensor(by_item[DATA_ITEM_CLIENTS], config_entry),
+        ZyxelClients5GHzSensor(by_item[DATA_ITEM_CLIENTS], config_entry),
 
-        # Port Ethernet (groupe lent)
-        ZyxelPortStatusSensor(slow, config_entry),
-        ZyxelPortTxRateSensor(slow, config_entry),
-        ZyxelPortRxRateSensor(slow, config_entry),
-        ZyxelPortTxBytesSensor(slow, config_entry),
-        ZyxelPortRxBytesSensor(slow, config_entry),
+        # Port Ethernet
+        ZyxelPortStatusSensor(by_item[DATA_ITEM_PORT], config_entry),
+        ZyxelPortTxRateSensor(by_item[DATA_ITEM_PORT], config_entry),
+        ZyxelPortRxRateSensor(by_item[DATA_ITEM_PORT], config_entry),
+        ZyxelPortTxBytesSensor(by_item[DATA_ITEM_PORT], config_entry),
+        ZyxelPortRxBytesSensor(by_item[DATA_ITEM_PORT], config_entry),
 
-        # Radio (groupe rapide : doit refléter l'état réel rapidement)
-        ZyxelSlot1StatusSensor(fast, config_entry),
-        ZyxelSlot2StatusSensor(fast, config_entry),
+        # Radio
+        ZyxelSlot1StatusSensor(by_item[DATA_ITEM_RADIO], config_entry),
+        ZyxelSlot2StatusSensor(by_item[DATA_ITEM_RADIO], config_entry),
     ]
 
     async_add_entities(sensors)
