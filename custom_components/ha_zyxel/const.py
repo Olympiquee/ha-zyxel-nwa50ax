@@ -59,6 +59,61 @@ PRIORITY_ADHOC = 9    # Commande ponctuelle via async_execute_command()
 BACKOFF_BASE_SECONDS = 30
 BACKOFF_MAX_SECONDS = 300
 
+# Détection de présence WiFi (device_tracker) - délai de grâce anti-flapping
+# avant de considérer un appareil comme "absent" après sa disparition du
+# dernier cycle rapide. Un multiple de l'intervalle rapide, avec un plancher,
+# pour absorber les micro-déconnexions WiFi des appareils en veille.
+PRESENCE_GRACE_MULTIPLIER = 3
+PRESENCE_GRACE_MIN_SECONDS = 300
+
+# ----------------------------------------------------------------------------
+# Répartition des données entre groupes de rafraîchissement (configurable)
+# ----------------------------------------------------------------------------
+# Chaque "item" ci-dessous correspond à une famille de données récupérées en
+# une ou plusieurs commandes SSH. L'utilisateur peut réaffecter n'importe quel
+# item à n'importe quel groupe depuis les options de l'intégration (menu
+# "Répartition des données") - la répartition par défaut ci-dessous reproduit
+# exactement le tri qu'on a défini ensemble.
+DATA_ITEM_RADIO = "radio"
+DATA_ITEM_CLIENTS = "clients"
+DATA_ITEM_CPU = "cpu"
+DATA_ITEM_MEMORY = "memory"
+DATA_ITEM_UPTIME = "uptime"
+DATA_ITEM_INTERFACES = "interfaces"
+DATA_ITEM_PORT = "port"
+DATA_ITEM_SSID_SCHEDULES = "ssid_schedules"
+DATA_ITEM_DEVICE_INFO = "device_info"
+
+DATA_ITEMS = [
+    DATA_ITEM_RADIO,
+    DATA_ITEM_CLIENTS,
+    DATA_ITEM_CPU,
+    DATA_ITEM_MEMORY,
+    DATA_ITEM_UPTIME,
+    DATA_ITEM_INTERFACES,
+    DATA_ITEM_PORT,
+    DATA_ITEM_SSID_SCHEDULES,
+    DATA_ITEM_DEVICE_INFO,
+]
+
+REFRESH_GROUPS = ["fast", "slow", "daily"]
+
+# Répartition par défaut = le tri qu'on a défini ensemble.
+DEFAULT_ITEM_GROUPS: dict[str, str] = {
+    DATA_ITEM_RADIO: "fast",
+    DATA_ITEM_CLIENTS: "fast",
+    DATA_ITEM_CPU: "slow",
+    DATA_ITEM_MEMORY: "slow",
+    DATA_ITEM_UPTIME: "slow",
+    DATA_ITEM_INTERFACES: "slow",
+    DATA_ITEM_PORT: "slow",
+    DATA_ITEM_SSID_SCHEDULES: "slow",
+    DATA_ITEM_DEVICE_INFO: "daily",
+}
+
+# Préfixe des clés d'options HA, une par item : "item_group_radio", etc.
+CONF_ITEM_GROUP_PREFIX = "item_group_"
+
 # Attributes (device_info)
 ATTR_DEVICE_MODEL = "device_model"
 ATTR_FIRMWARE_VERSION = "firmware_version"
