@@ -23,11 +23,40 @@
     "step": {
       "init": {
         "title": "Options Zyxel NWA50AX",
-        "description": "Groupes de rafraîchissement : Rapide = radios + clients connectés. Lent = CPU/RAM/interfaces/port + schedules SSID. Quotidien = modèle/firmware. La connexion MikroTik est optionnelle, utilisée uniquement pour résoudre les noms d'appareils depuis les baux DHCP - totalement découplée de la connexion à l'AP Zyxel.",
+        "menu_options": {
+          "intervals": "Intervalles de rafraîchissement",
+          "data_groups": "Répartition des données (rapide/lent/quotidien)",
+          "mikrotik": "Résolveur de noms MikroTik"
+        }
+      },
+      "intervals": {
+        "title": "Intervalles de rafraîchissement",
+        "description": "À quelle fréquence chaque groupe est rafraîchi. Quelles données appartiennent à quel groupe se règle séparément, dans \"Répartition des données\".",
         "data": {
           "fast_interval": "Intervalle groupe rapide (secondes)",
           "slow_interval": "Intervalle groupe lent (secondes)",
-          "daily_interval": "Intervalle groupe quotidien (secondes)",
+          "daily_interval": "Intervalle groupe quotidien (secondes)"
+        }
+      },
+      "data_groups": {
+        "title": "Répartition des données",
+        "description": "Choisis à quel groupe de rafraîchissement (Rapide / Lent / Quotidien) appartient chaque famille de données. Les valeurs par défaut correspondent au tri recommandé ; change-les librement.",
+        "data": {
+          "item_group_radio": "État des radios (2,4GHz / 5GHz)",
+          "item_group_clients": "Clients WiFi connectés",
+          "item_group_cpu": "Utilisation CPU",
+          "item_group_memory": "Utilisation mémoire",
+          "item_group_uptime": "Uptime",
+          "item_group_interfaces": "Interfaces réseau",
+          "item_group_port": "Port Ethernet",
+          "item_group_ssid_schedules": "Schedules SSID (dont Guest)",
+          "item_group_device_info": "Modèle / firmware"
+        }
+      },
+      "mikrotik": {
+        "title": "Résolveur de noms MikroTik",
+        "description": "Optionnel. Résout les noms d'appareils depuis les baux DHCP du MikroTik - totalement découplé de la connexion à l'AP Zyxel (sa propre connexion, son propre cycle, son propre cache).",
+        "data": {
           "mikrotik_enabled": "Activer le résolveur de noms MikroTik",
           "mikrotik_host": "Adresse IP du MikroTik",
           "mikrotik_username": "Nom d'utilisateur MikroTik",
