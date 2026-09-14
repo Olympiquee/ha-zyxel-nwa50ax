@@ -6,7 +6,7 @@ from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -19,9 +19,11 @@ from .const import (
     CONF_MIKROTIK_HOST,
     CONF_MIKROTIK_PASSWORD,
     CONF_MIKROTIK_REFRESH_INTERVAL,
+    CONF_MIKROTIK_SSH_FINGERPRINT,
     CONF_MIKROTIK_USERNAME,
     CONF_PASSWORD,
     CONF_SLOW_INTERVAL,
+    CONF_SSH_FINGERPRINT,
     CONF_USERNAME,
     DATA_ITEM_CLIENTS,
     DATA_ITEMS,
@@ -36,11 +38,17 @@ from .const import (
 )
 from .mikrotik_resolver import MikrotikHostnameResolver
 from .presence import PresenceTracker
-from .zyxel_ssh_api import ZyxelConnectionError, ZyxelSSHAPI
+from .ssh_security import SSHHostKeyChangedError
+from .zyxel_ssh_api import ZyxelAuthError, ZyxelConnectionError, ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.BUTTON, Platform.DEVICE_TRACKER]
+
+
+def _persist_option(hass: HomeAssistant, entry: ConfigEntry, key: str, value) -> None:
+    """Écrit une clé dans les options de l'entry sans perturber les autres."""
+    hass.config_entries.async_update_entry(entry, options={**entry.options, key: value})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -65,12 +73,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api = ZyxelSSHAPI(host, username, password)
     api.set_item_groups(item_groups)
 
-    if not await api.async_connect():
+    # Empreinte SSH mémorisée (TOFU - voir ssh_security.py). Persistée dans
+    # les options dès la première connexion réussie ; comparée ensuite à
+    # chaque connexion pour détecter un changement de clé côté AP.
+    api.set_pinned_fingerprint(entry.options.get(CONF_SSH_FINGERPRINT))
+    api.set_fingerprint_pinned_callback(
+        lambda fp: _persist_option(hass, entry, CONF_SSH_FINGERPRINT, fp)
+    )
+
+    try:
+        connected = await api.async_connect()
+    except ZyxelAuthError as err:
+        raise ConfigEntryAuthFailed("Authentification SSH refusée par l'AP Zyxel") from err
+    except SSHHostKeyChangedError as err:
+        raise ConfigEntryNotReady(
+            f"{err} Va dans les options de l'intégration (section Sécurité) pour "
+            f"réinitialiser l'empreinte mémorisée si ce changement est légitime."
+        ) from err
+
+    if not connected:
         raise ConfigEntryNotReady(f"Cannot connect to {host}")
 
     # État partagé entre TOUTES les entités, indépendamment de quel coordinator
     # (fast/slow/daily) les alimente par ailleurs - voir entity_helpers.py.
     shared_state = {"device_info": {}, "last_seen": None}
+
+    # Verrou radio partagé (une seule instance par entry, dans hass.data
+    # plutôt qu'un dict de module comme avant - un dict de module survivait
+    # à la suppression d'une entry sans jamais être nettoyé).
+    radio_lock = asyncio.Lock()
 
     # Présence WiFi (device_tracker) - cache mémoire séparé, avec délai de
     # grâce anti-flapping (voir presence.py). Le délai se base sur l'intervalle
@@ -92,6 +123,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async def _update() -> dict:
             try:
                 data = await api.async_get_group_data(group)
+            except ZyxelAuthError as err:
+                # Déclenche le flux `reauth` HA - peut survenir après coup si
+                # le mot de passe SSH est changé côté AP alors que HA tourne
+                # déjà (pas seulement au tout premier démarrage).
+                raise ConfigEntryAuthFailed(str(err)) from err
+            except SSHHostKeyChangedError as err:
+                raise UpdateFailed(
+                    f"{err} Vérifie les options de l'intégration (section Sécurité)."
+                ) from err
             except ZyxelConnectionError as err:
                 raise UpdateFailed(str(err)) from err
             except Exception as err:
@@ -161,6 +201,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     CONF_MIKROTIK_REFRESH_INTERVAL, DEFAULT_MIKROTIK_REFRESH_INTERVAL
                 ),
             )
+            resolver.set_pinned_fingerprint(entry.options.get(CONF_MIKROTIK_SSH_FINGERPRINT))
+            resolver.set_fingerprint_pinned_callback(
+                lambda fp: _persist_option(hass, entry, CONF_MIKROTIK_SSH_FINGERPRINT, fp)
+            )
             await resolver.async_start()
             api.set_hostname_resolver(resolver.get_hostname)
         else:
@@ -178,6 +222,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "item_groups": item_groups,
         "shared_state": shared_state,
         "presence_tracker": presence_tracker,
+        "radio_lock": radio_lock,
         "resolver": resolver,
         "unsub_listeners": [],
     }
