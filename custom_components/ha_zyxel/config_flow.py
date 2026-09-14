@@ -16,9 +16,13 @@ from .const import (
     CONF_MIKROTIK_HOST,
     CONF_MIKROTIK_PASSWORD,
     CONF_MIKROTIK_REFRESH_INTERVAL,
+    CONF_MIKROTIK_SSH_FINGERPRINT,
     CONF_MIKROTIK_USERNAME,
     CONF_PASSWORD,
+    CONF_RESET_MIKROTIK_SSH_FINGERPRINT,
+    CONF_RESET_SSH_FINGERPRINT,
     CONF_SLOW_INTERVAL,
+    CONF_SSH_FINGERPRINT,
     CONF_UPDATE_INTERVAL,
     CONF_USERNAME,
     DATA_ITEMS,
@@ -37,7 +41,8 @@ from .const import (
     MIN_FAST_INTERVAL,
     MIN_SLOW_INTERVAL,
 )
-from .zyxel_ssh_api import ZyxelSSHAPI
+from .ssh_security import SSHHostKeyChangedError
+from .zyxel_ssh_api import ZyxelAuthError, ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,7 +73,12 @@ def _group_selector() -> selector.SelectSelector:
 
 
 async def validate_input(hass: HomeAssistant, data: dict) -> dict:
-    """Validate that the user input allows us to connect."""
+    """Validate that the user input allows us to connect.
+
+    Note : ce test de connexion utilise sa propre instance API jetable, donc
+    sa propre empreinte SSH TOFU (jamais persistée) - il ne pollue jamais
+    l'empreinte mémorisée par l'entry réelle créée dans __init__.py.
+    """
     host = data[CONF_HOST]
     username = data[CONF_USERNAME]
     password = data[CONF_PASSWORD]
@@ -79,7 +89,9 @@ async def validate_input(hass: HomeAssistant, data: dict) -> dict:
         connected = await api.async_connect()
         if not connected:
             raise CannotConnect("Cannot connect - check host, username and password")
-    except CannotConnect:
+    except ZyxelAuthError as ex:
+        raise InvalidAuth from ex
+    except (CannotConnect, SSHHostKeyChangedError):
         raise
     except Exception as ex:
         _LOGGER.error("Unable to connect to Zyxel device: %s", ex)
@@ -102,6 +114,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 info = await validate_input(self.hass, user_input)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
             except Exception:
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
@@ -115,26 +129,90 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user", data_schema=DATA_SCHEMA, errors=errors
         )
 
+    async def async_step_reconfigure(self, user_input=None):
+        """Permet de changer host/username/password sans supprimer/recréer l'intégration."""
+        errors = {}
+        reconfigure_entry = self._get_reconfigure_entry()
+
+        if user_input is not None:
+            try:
+                await validate_input(self.hass, user_input)
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except Exception:
+                _LOGGER.exception("Unexpected exception")
+                errors["base"] = "unknown"
+
+            if not errors:
+                return self.async_update_reload_and_abort(
+                    reconfigure_entry, data=user_input
+                )
+
+        current = reconfigure_entry.data
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({
+                vol.Required(CONF_HOST, default=current.get(CONF_HOST, DEFAULT_HOST)): str,
+                vol.Required(CONF_USERNAME, default=current.get(CONF_USERNAME, DEFAULT_USERNAME)): str,
+                vol.Required(CONF_PASSWORD): str,
+            }),
+            errors=errors,
+        )
+
+    async def async_step_reauth(self, entry_data):
+        """Déclenché automatiquement par HA quand l'authentification SSH échoue."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None):
+        """Demande un nouveau mot de passe suite à un échec d'authentification."""
+        errors = {}
+        reauth_entry = self._get_reauth_entry()
+
+        if user_input is not None:
+            new_data = {**reauth_entry.data, CONF_PASSWORD: user_input[CONF_PASSWORD]}
+            try:
+                await validate_input(self.hass, new_data)
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except Exception:
+                _LOGGER.exception("Unexpected exception")
+                errors["base"] = "unknown"
+
+            if not errors:
+                return self.async_update_reload_and_abort(reauth_entry, data=new_data)
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
+            errors=errors,
+        )
+
     @staticmethod
     def async_get_options_flow(config_entry):
         """Return the options flow."""
-        return OptionsFlow(config_entry)
+        return OptionsFlow()
 
 
 class OptionsFlow(config_entries.OptionsFlow):
-    """Options Zyxel : menu à 3 sections (intervalles / répartition des données / MikroTik).
+    """Options Zyxel : menu à 4 sections.
+
+    Pas de __init__ personnalisé : `self.config_entry` est désormais fourni
+    automatiquement par le framework HA (versions récentes de Home Assistant
+    Core - le faire manuellement comme avant, via `self.config_entry =
+    config_entry` dans __init__, lève une erreur sur ces versions, car
+    `config_entry` y est devenu une propriété en lecture seule héritée de la
+    classe de base).
 
     Chaque sous-étape sauvegarde IMMÉDIATEMENT ce qu'elle contient, fusionné
     avec le reste des options existantes (`{**self.config_entry.options,
     **user_input}`) - important car `async_create_entry` sur une OptionsFlow
     REMPLACE tout `entry.options`, il ne fusionne pas tout seul. Sans ce
-    merge explicite, sauvegarder "Répartition des données" effacerait les
-    intervalles déjà configurés, et inversement.
+    merge explicite, sauvegarder une section effacerait les autres.
     """
-
-    def __init__(self, config_entry):
-        """Initialize options flow."""
-        self.config_entry = config_entry
 
     def _save(self, user_input: dict) -> config_entries.FlowResult:
         merged = {**self.config_entry.options, **user_input}
@@ -144,7 +222,7 @@ class OptionsFlow(config_entries.OptionsFlow):
         """Menu principal des options."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["intervals", "data_groups", "mikrotik"],
+            menu_options=["intervals", "data_groups", "mikrotik", "security"],
         )
 
     async def async_step_intervals(self, user_input=None):
@@ -222,6 +300,45 @@ class OptionsFlow(config_entries.OptionsFlow):
             }),
         )
 
+    async def async_step_security(self, user_input=None):
+        """Empreintes SSH mémorisées (TOFU) - état + réinitialisation à la demande.
+
+        Les 2 cases à cocher sont des actions ponctuelles (jamais persistées
+        telles quelles) : si cochées à la sauvegarde, l'empreinte
+        correspondante est effacée des options, ce qui refait confiance à la
+        clé rencontrée à la prochaine connexion et la mémorise à nouveau.
+        """
+        options = self.config_entry.options
+
+        if user_input is not None:
+            merged = {**options}
+            if user_input.get(CONF_RESET_SSH_FINGERPRINT):
+                merged.pop(CONF_SSH_FINGERPRINT, None)
+                _LOGGER.info("Empreinte SSH Zyxel réinitialisée depuis les options")
+            if user_input.get(CONF_RESET_MIKROTIK_SSH_FINGERPRINT):
+                merged.pop(CONF_MIKROTIK_SSH_FINGERPRINT, None)
+                _LOGGER.info("Empreinte SSH MikroTik réinitialisée depuis les options")
+            return self.async_create_entry(title="", data=merged)
+
+        zyxel_fp = options.get(CONF_SSH_FINGERPRINT, "Non mémorisée")
+        mikrotik_fp = options.get(CONF_MIKROTIK_SSH_FINGERPRINT, "Non mémorisée / désactivée")
+
+        return self.async_show_form(
+            step_id="security",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_RESET_SSH_FINGERPRINT, default=False): bool,
+                vol.Optional(CONF_RESET_MIKROTIK_SSH_FINGERPRINT, default=False): bool,
+            }),
+            description_placeholders={
+                "zyxel_fingerprint": zyxel_fp,
+                "mikrotik_fingerprint": mikrotik_fp,
+            },
+        )
+
 
 class CannotConnect(HomeAssistantError):
     """Error to indicate we cannot connect."""
+
+
+class InvalidAuth(HomeAssistantError):
+    """Error to indicate the credentials were rejected."""
