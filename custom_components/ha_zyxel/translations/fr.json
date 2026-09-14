@@ -9,14 +9,33 @@
           "username": "Nom d'utilisateur",
           "password": "Mot de passe"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigurer le périphérique Zyxel",
+        "description": "Modifie les informations de connexion sans supprimer et recréer l'intégration.",
+        "data": {
+          "host": "Adresse IP ou nom d'hôte",
+          "username": "Nom d'utilisateur",
+          "password": "Mot de passe"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Ré-authentification",
+        "description": "L'AP a refusé les identifiants enregistrés. Saisis le mot de passe SSH actuel.",
+        "data": {
+          "password": "Mot de passe"
+        }
       }
     },
     "error": {
-      "cannot_connect": "Impossible de se connecter au périphérique. Vérifiez l'adresse IP, le nom d'utilisateur et le mot de passe.",
+      "cannot_connect": "Impossible de se connecter au périphérique. Vérifiez l'adresse IP et le réseau.",
+      "invalid_auth": "Authentification refusée. Vérifiez le nom d'utilisateur et le mot de passe.",
       "unknown": "Erreur inattendue"
     },
     "abort": {
-      "already_configured": "Ce périphérique est déjà configuré"
+      "already_configured": "Ce périphérique est déjà configuré",
+      "reconfigure_successful": "Reconfiguration réussie",
+      "reauth_successful": "Ré-authentification réussie"
     }
   },
   "options": {
@@ -26,7 +45,8 @@
         "menu_options": {
           "intervals": "Intervalles de rafraîchissement",
           "data_groups": "Répartition des données (rapide/lent/quotidien)",
-          "mikrotik": "Résolveur de noms MikroTik"
+          "mikrotik": "Résolveur de noms MikroTik",
+          "security": "Sécurité (empreintes SSH)"
         }
       },
       "intervals": {
@@ -62,6 +82,14 @@
           "mikrotik_username": "Nom d'utilisateur MikroTik",
           "mikrotik_password": "Mot de passe MikroTik",
           "mikrotik_refresh_interval": "Intervalle de rafraîchissement des baux MikroTik (secondes)"
+        }
+      },
+      "security": {
+        "title": "Sécurité - empreintes SSH",
+        "description": "Les empreintes de clé hôte SSH sont mémorisées à la première connexion (Trust On First Use) et vérifiées à chaque connexion suivante. Empreinte Zyxel actuelle : {zyxel_fingerprint}. Empreinte MikroTik actuelle : {mikrotik_fingerprint}. Ne réinitialise une empreinte que si tu es certain que le changement est légitime (remplacement de l'appareil, reset usine) - sinon cela pourrait signaler une interception de la connexion.",
+        "data": {
+          "reset_ssh_fingerprint": "Réinitialiser l'empreinte SSH Zyxel mémorisée",
+          "reset_mikrotik_ssh_fingerprint": "Réinitialiser l'empreinte SSH MikroTik mémorisée"
         }
       }
     }
