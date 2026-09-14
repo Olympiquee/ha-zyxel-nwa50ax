@@ -9,14 +9,33 @@
           "username": "Username",
           "password": "Password"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Zyxel Device",
+        "description": "Update the connection details without removing and re-adding the integration.",
+        "data": {
+          "host": "IP Address or Hostname",
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate",
+        "description": "The AP rejected the stored credentials. Enter the current SSH password.",
+        "data": {
+          "password": "Password"
+        }
       }
     },
     "error": {
-      "cannot_connect": "Unable to connect to device. Check IP address, username and password.",
+      "cannot_connect": "Unable to connect to device. Check IP address and network.",
+      "invalid_auth": "Authentication failed. Check username and password.",
       "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "Device is already configured"
+      "already_configured": "Device is already configured",
+      "reconfigure_successful": "Reconfiguration successful",
+      "reauth_successful": "Re-authentication successful"
     }
   },
   "options": {
@@ -26,7 +45,8 @@
         "menu_options": {
           "intervals": "Refresh intervals",
           "data_groups": "Data assignment (fast/slow/daily)",
-          "mikrotik": "MikroTik hostname resolver"
+          "mikrotik": "MikroTik hostname resolver",
+          "security": "Security (SSH fingerprints)"
         }
       },
       "intervals": {
@@ -62,6 +82,14 @@
           "mikrotik_username": "MikroTik username",
           "mikrotik_password": "MikroTik password",
           "mikrotik_refresh_interval": "MikroTik lease refresh interval (seconds)"
+        }
+      },
+      "security": {
+        "title": "Security - SSH fingerprints",
+        "description": "SSH host key fingerprints are remembered on first connection (Trust On First Use) and checked on every connection afterwards. Current Zyxel fingerprint: {zyxel_fingerprint}. Current MikroTik fingerprint: {mikrotik_fingerprint}. Only reset a fingerprint if you know the key change is legitimate (device replaced/factory reset) - otherwise it could indicate someone intercepting the connection.",
+        "data": {
+          "reset_ssh_fingerprint": "Reset remembered Zyxel SSH fingerprint",
+          "reset_mikrotik_ssh_fingerprint": "Reset remembered MikroTik SSH fingerprint"
         }
       }
     }
