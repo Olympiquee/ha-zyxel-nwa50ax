@@ -14,7 +14,6 @@ from .entity_helpers import build_device_info
 from .zyxel_ssh_api import ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
-_radio_locks: dict[str, asyncio.Lock] = {}
 
 
 class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
@@ -174,16 +173,12 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
     _attr_icon = "mdi:radio-tower"
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, api, config_entry: ConfigEntry) -> None:
+    def __init__(self, coordinator, api, config_entry: ConfigEntry, radio_lock: asyncio.Lock) -> None:
         """Initialize the switch."""
         super().__init__(coordinator)
         self._api = api
         self._config_entry = config_entry
-
-        lock_key = f"{config_entry.entry_id}_radio"
-        if lock_key not in _radio_locks:
-            _radio_locks[lock_key] = asyncio.Lock()
-        self._lock = _radio_locks[lock_key]
+        self._lock = radio_lock
 
     @property
     def unique_id(self) -> str:
@@ -195,10 +190,10 @@ class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
         return build_device_info(self.hass, self._config_entry.entry_id)
 
     @property
-    def is_on(self) -> bool:
-        """Return true if 2.4GHz radio is active."""
+    def is_on(self) -> bool | None:
+        """Return true if 2.4GHz radio is active. None si pas encore déterminé."""
         radio = self.coordinator.data.get("radio", {})
-        return radio.get("slot1_active", False)
+        return radio.get("slot1_active")
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the 2.4GHz radio on."""
@@ -259,16 +254,12 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
     _attr_icon = "mdi:radio-tower"
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, api, config_entry: ConfigEntry) -> None:
+    def __init__(self, coordinator, api, config_entry: ConfigEntry, radio_lock: asyncio.Lock) -> None:
         """Initialize the switch."""
         super().__init__(coordinator)
         self._api = api
         self._config_entry = config_entry
-
-        lock_key = f"{config_entry.entry_id}_radio"
-        if lock_key not in _radio_locks:
-            _radio_locks[lock_key] = asyncio.Lock()
-        self._lock = _radio_locks[lock_key]
+        self._lock = radio_lock
 
     @property
     def unique_id(self) -> str:
@@ -280,10 +271,10 @@ class ZyxelRadio5GSwitch(CoordinatorEntity, SwitchEntity):
         return build_device_info(self.hass, self._config_entry.entry_id)
 
     @property
-    def is_on(self) -> bool:
-        """Return true if 5GHz radio is active."""
+    def is_on(self) -> bool | None:
+        """Return true if 5GHz radio is active. None si pas encore déterminé."""
         radio = self.coordinator.data.get("radio", {})
-        return radio.get("slot2_active", False)
+        return radio.get("slot2_active")
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the 5GHz radio on."""
@@ -348,11 +339,12 @@ async def async_setup_entry(
     radio_coordinator = by_item[DATA_ITEM_RADIO]
     ssid_coordinator = by_item[DATA_ITEM_SSID_SCHEDULES]
     api = entry_data["api"]
+    radio_lock = entry_data["radio_lock"]
 
     entities = [
         ZyxelGuestSSIDSwitch(ssid_coordinator, api, entry),
-        ZyxelRadio24GSwitch(radio_coordinator, api, entry),
-        ZyxelRadio5GSwitch(radio_coordinator, api, entry),
+        ZyxelRadio24GSwitch(radio_coordinator, api, entry, radio_lock),
+        ZyxelRadio5GSwitch(radio_coordinator, api, entry, radio_lock),
     ]
 
     # Auto-détection des SSIDs (depuis le cache déjà alimenté par le premier
