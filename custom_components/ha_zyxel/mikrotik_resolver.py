@@ -20,11 +20,12 @@ import asyncio
 import logging
 import re
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from homeassistant.core import HomeAssistant
 
-from .const import DEFAULT_MIKROTIK_REFRESH_INTERVAL, MIKROTIK_HOSTNAME_CACHE_TTL
+from .const import CLI_CONNECT_TIMEOUT, DEFAULT_MIKROTIK_REFRESH_INTERVAL, MIKROTIK_HOSTNAME_CACHE_TTL
+from .ssh_security import PinnedHostKeyPolicy
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,10 +72,33 @@ class MikrotikHostnameResolver:
         self._last_refresh_ok: float = 0.0
         self._task: Optional[asyncio.Task] = None
 
+        # Empreinte SSH mémorisée (TOFU, voir ssh_security.py) - même logique
+        # que pour la connexion Zyxel, branchée par __init__.py.
+        self._pinned_fingerprint: Optional[str] = None
+        self._on_fingerprint_pinned: Callable[[str], None] = lambda fp: None
+
         if not HAS_PARAMIKO:
             _LOGGER.error(
                 "paramiko indisponible : le résolveur de noms MikroTik est désactivé"
             )
+
+    def set_pinned_fingerprint(self, fingerprint: Optional[str]) -> None:
+        """Empreinte SSH déjà connue (persistée côté HA), ou None si jamais vue."""
+        self._pinned_fingerprint = fingerprint
+
+    def set_fingerprint_pinned_callback(self, callback) -> None:
+        """Callback appelé la première fois qu'une empreinte est mémorisée (TOFU)."""
+        self._on_fingerprint_pinned = callback or (lambda fp: None)
+
+    def _make_host_key_policy(self) -> PinnedHostKeyPolicy:
+        def _get_pinned() -> Optional[str]:
+            return self._pinned_fingerprint
+
+        def _on_trust(fingerprint: str) -> None:
+            self._pinned_fingerprint = fingerprint
+            self._on_fingerprint_pinned(fingerprint)
+
+        return PinnedHostKeyPolicy(_get_pinned, _on_trust)
 
     async def async_start(self) -> None:
         """Démarre la boucle de rafraîchissement en tâche de fond."""
@@ -122,13 +146,13 @@ class MikrotikHostnameResolver:
         ssh = None
         try:
             ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.set_missing_host_key_policy(self._make_host_key_policy())
             ssh.connect(
                 self.host,
                 port=self.port,
                 username=self.username,
                 password=self.password,
-                timeout=10,
+                timeout=CLI_CONNECT_TIMEOUT,
                 look_for_keys=False,
                 allow_agent=False,
             )
