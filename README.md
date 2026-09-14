@@ -1,375 +1,166 @@
 # Zyxel NWA50AX Home Assistant Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)
 
-Home Assistant custom integration for **Zyxel NWA50AX** WiFi Access Point using SSH.
+Home Assistant custom integration for a **Zyxel NWA50AX** WiFi access point (standalone mode) over SSH.
 
-## ✨ Features
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
-### 📊 18 Sensors
-- **System**: Uptime (formatted), Firmware version, Last Seen timestamp
-- **Performance**: CPU usage (current + 1min/5min avg), Memory usage
-- **WiFi Clients**: Total clients, 2.4GHz clients, 5GHz clients
-  - **NEW**: Client hostnames via reverse DNS
-  - Detailed info: MAC, IP, hostname, SSID, RSSI, band
-- **Ethernet Port**: Status, TX/RX rates, Total bytes transferred
-- **Radio**: 2.4GHz and 5GHz radio status with active SSIDs
+## Supported firmware
 
-### 🎛️ Controls
-- **Switch**: Guest SSID on/off control
-- **NEW Switch**: Radio 2.4GHz on/off control
-- **NEW Switch**: Radio 5GHz on/off control
-- **Button**: Reboot access point
+| Firmware | Status |
+|---|---|
+| 7.10(ABYW.3) | Validated (manufacturer CLI reference + real captures) |
+| 7.12(ABYW.0) | Validated (real CLI captures, see `tests/fixtures/v712/`) |
 
-### 🆕 Version 1.1.0 Features
-- ✅ **Client hostnames** - See device names via reverse DNS
-- ✅ **Configurable update interval** - Choose 30-300 seconds (default: 60s)
-- ✅ **Radio control switches** - Turn 2.4GHz/5GHz radios on/off
-- ✅ **Formatted uptime** - Display as "1d 5h 34m" instead of seconds
-- ✅ **Last Seen sensor** - Track last successful AP communication
-- ✅ **Batch command execution** - Fixed "Socket is closed" errors
+No breaking CLI format change was found between these two firmware lines for the commands this integration uses. Real captures are kept as regression-test fixtures so a future firmware update can be checked the same way, without needing physical access to the AP for every code change.
 
-### 📱 Detailed Client Information
-Each client includes:
-- MAC address
-- IP address
-- **Hostname** (via reverse DNS) ← NEW
-- SSID name
-- WiFi band (2.4GHz / 5GHz)
-- Signal strength (RSSI in dBm)
-- TX/RX rates
-- Security type
-- Connection time
+## Features
 
-## 📋 Requirements
+### Sensors
+- System: Uptime, Firmware/model, Last Seen (reactive to all 3 refresh groups)
+- Performance: CPU (current + 1/5 min avg, any number of cores), Memory usage
+- WiFi clients: total / 2.4GHz / 5GHz counts, with a detailed attribute list (MAC, IP, hostname, SSID, band, RSSI)
+- Ethernet port: status, TX/RX rate, TX/RX total bytes
+- Radio: 2.4GHz / 5GHz status with active SSIDs
 
-- Zyxel NWA50AX access point
-- Firmware V7.10(ABYW.3) or compatible
+Numeric/boolean sensors report `unknown` (not `0` / `False`) when a value could not be parsed, so a parsing failure is never silently confused with a real zero reading.
+
+### Switches
+- Guest SSID (always-on vs. follows its configured schedule)
+- One schedule switch per additional SSID, auto-detected from the AP (Home/IoT/etc. - whatever you actually have configured)
+- Radio 2.4GHz / 5GHz on-off
+
+### Device tracker
+- One entity per WiFi client ever seen, created dynamically as they connect
+- Presence uses a grace period (anti-flapping) so a phone's WiFi power-saving doesn't cause spurious home/away flips
+- Display name uses the resolved hostname (see MikroTik resolver below); if two known devices share the same generic hostname (e.g. two "iPhone"), a short MAC-based suffix is added automatically to tell them apart
+- Attach these to a HA `Person` to get presence-based automations for free
+
+### Button
+- Reboot
+- One manual refresh button per refresh group (fast/slow/daily) - jumps ahead of the scheduled automatic refresh
+
+### Diagnostics
+Available from the integration's device page ("Download diagnostics"). Contains model/firmware, configured intervals, data-group assignment, last-seen timestamp, and connection health counters. Never contains passwords, client MAC/IP addresses, or SSID names.
+
+## Requirements
+
+- Zyxel NWA50AX access point (standalone mode)
 - SSH access enabled on the AP
-- Home Assistant 2024.1.0 or newer
+- Home Assistant 2024.1.0 or newer (some options-flow features require a reasonably recent Core version - see Troubleshooting if the options page fails to open)
 - Python package: `paramiko>=2.12.0`
 
-## 🚀 Installation
+## Installation
 
-### Option 1: Manual Installation
+### HACS (recommended)
+1. HACS → Integrations → ⋮ → Custom repositories
+2. Add `https://github.com/Olympiquee/ha-zyxel-nwa50ax` as an Integration
+3. Install, then restart Home Assistant
 
-1. Download this repository
-2. Copy the `custom_components/ha_zyxel` folder to your Home Assistant `config/custom_components/` directory
-3. Restart Home Assistant
-4. Go to **Configuration** → **Integrations**
-5. Click **+ Add Integration**
-6. Search for **"Zyxel"**
-7. Enter your NWA50AX details:
-   - Host: IP address of your AP (e.g., `192.168.1.2`)
-   - Port: `22` (SSH port)
-   - Username: `admin`
-   - Password: Your admin password
-   - **Update Interval**: 30-300 seconds (default: 60s) ← NEW
+### Manual
+1. Copy `custom_components/ha_zyxel` into your `config/custom_components/` directory
+2. Restart Home Assistant (a config-flow-carrying integration needs a full restart, not just a reload, to pick up code changes)
+3. Settings → Devices & Services → Add Integration → search "Zyxel"
 
-### Option 2: HACS (Recommended)
+## Initial setup
 
-1. Open HACS
-2. Go to **Integrations**
-3. Click the three dots in the top right corner
-4. Select **Custom repositories**
-5. Add this repository URL: `https://github.com/Olympiquee/ha-zyxel-nwa50ax`
-6. Select **Integration** as category
-7. Click **Install**
-8. Restart Home Assistant
-9. Follow steps 4-7 from Manual Installation above
+You'll be asked for:
+- **Host**: AP IP address (e.g. `10.0.20.2`)
+- **Username** / **Password**: SSH admin credentials
 
-## ⚙️ Configuration
+The very first successful connection also memorizes the AP's SSH host key fingerprint (see Security below) - nothing to do manually, it happens automatically.
 
-### Enable SSH on NWA50AX
+## Configuration (after setup)
 
-1. Log in to your NWA50AX web interface
-2. Go to **Management** → **Services**
-3. Enable **SSH**
-4. Set port to `22`
-5. Allow access from your local network
-6. Save settings
+Open the integration's **Configure** button to reach a menu with 4 sections:
 
-### Radio Control
+### Refresh intervals
+Three independent intervals, one per refresh group:
+- **Fast** (default 2 min): meant for whatever changes often
+- **Slow** (default 1h): meant for data that rarely changes minute to minute
+- **Daily** (default 24h): meant for near-static data (firmware/model)
 
-The integration includes switches to control WiFi radios:
+### Data assignment
+Which family of data (radio state, WiFi clients, CPU, memory, uptime, interfaces, Ethernet port, SSID schedules, model/firmware) belongs to which of the 3 groups above. The default split:
 
-- **Radio 2.4GHz Switch**: Turn the 2.4GHz radio on/off (affects all SSIDs on this band)
-- **Radio 5GHz Switch**: Turn the 5GHz radio on/off (affects all SSIDs on this band)
-- **Guest SSID Switch**: Control Guest SSID schedule
-  - ON = Guest SSID always active (ignores schedule)
-  - OFF = Guest SSID follows configured schedule
+| Group | Data |
+|---|---|
+| Fast | Radio state, WiFi clients |
+| Slow | CPU, memory, uptime, interfaces, Ethernet port, SSID schedules |
+| Daily | Model / firmware |
 
-## 📊 Example Dashboard
+Change any of these freely - a change takes effect immediately (the integration reloads itself), no restart needed. Every read-only command for a given cycle is sent in a single SSH session, so reassigning items doesn't multiply the number of connections to the AP.
 
-```yaml
-type: vertical-stack
-title: 🌐 Zyxel NWA50AX
-cards:
-  # Controls
-  - type: entities
-    title: WiFi Control
-    entities:
-      - entity: switch.zyxel_nwa50ax_radio_2_4ghz
-        name: Radio 2.4GHz
-      - entity: switch.zyxel_nwa50ax_radio_5_ghz
-        name: Radio 5GHz
-      - entity: switch.zyxel_nwa50ax_guest_ssid
-        name: Guest SSID
-      - entity: button.zyxel_nwa50ax_reboot
+### MikroTik hostname resolver (optional)
+If your DHCP server is a MikroTik router rather than the AP itself, enable this to resolve WiFi client hostnames from `/ip dhcp-server lease print`. It has its own SSH connection, its own refresh cycle and its own cache - completely decoupled from the Zyxel connection, so a MikroTik outage never affects AP data collection.
 
-  # Information
-  - type: entities
-    title: System
-    entities:
-      - sensor.zyxel_nwa50ax_uptime
-      - sensor.zyxel_nwa50ax_last_seen
-      - sensor.zyxel_nwa50ax_firmware
-      - sensor.zyxel_nwa50ax_connected_clients
+Why MikroTik and not a plain reverse-DNS lookup: in a setup where the router itself is the DNS resolver clients talk to (forwarding upstream to something like AdGuard/Pi-hole), reverse DNS on the LAN typically has no records for internal clients, and the upstream resolver never even sees individual client IPs. The DHCP lease table is the actual source of truth for "which device has this name."
 
-  # Performance
-  - type: horizontal-stack
-    cards:
-      - type: gauge
-        entity: sensor.zyxel_nwa50ax_cpu_usage
-        name: CPU
-        min: 0
-        max: 100
-      - type: gauge
-        entity: sensor.zyxel_nwa50ax_memory_usage
-        name: Memory
-        min: 0
-        max: 100
+### Security - SSH fingerprints
+Both the Zyxel and (if enabled) MikroTik SSH connections use Trust On First Use: the host key fingerprint is memorized on first connection and compared on every connection afterward, rather than blindly accepted every time (`AutoAddPolicy`). If the fingerprint ever changes, the connection is refused with a clear error - this could mean the device was legitimately replaced/factory-reset, or it could mean something is intercepting the connection on your LAN.
 
-  # WiFi Clients with Hostnames
-  - type: markdown
-    content: |
-      ## Connected Clients
-      {% set clients = state_attr('sensor.zyxel_nwa50ax_connected_clients', 'client_list') %}
-      {% if clients %}
-        {% for client in clients %}
-          - **{{ client.hostname if client.hostname else 'Unknown' }}**
-            - IP: {{ client.ip }}
-            - SSID: {{ client.ssid }} ({{ client.band }})
-            - Signal: {{ client.rssi_dbm }} dBm
-        {% endfor %}
-      {% else %}
-        No clients connected
-      {% endif %}
+This screen shows both currently-memorized fingerprints and lets you reset either one (e.g. after a legitimate hardware replacement), which makes the integration trust and re-memorize whatever key it sees on the next connection.
+
+## Reconfigure / Re-authenticate
+
+- **Reconfigure** (from the integration's menu): update host/username/password without removing and re-adding the integration.
+- **Reauthenticate**: triggered automatically if the AP rejects the stored credentials (wrong/changed password), prompting for a new password without losing any other configuration.
+
+## SSH commands used
+
+Read-only (grouped per cycle into a single SSH session):
+```
+show version
+show system uptime
+show cpu all
+show mem status
+show wlan all
+show wireless-hal station info
+show interface all
+show port status
+show wlan-ssid-profile <name>      # one per detected SSID
 ```
 
-## 🤖 Example Automations
-
-### Night Mode (Disable Guest + 2.4GHz)
-
-```yaml
-automation:
-  - alias: "WiFi Night Mode"
-    trigger:
-      - platform: time
-        at: "23:00:00"
-    action:
-      - service: switch.turn_off
-        target:
-          entity_id:
-            - switch.zyxel_nwa50ax_guest_ssid
-            - switch.zyxel_nwa50ax_radio_2_4ghz
-
-  - alias: "WiFi Day Mode"
-    trigger:
-      - platform: time
-        at: "06:00:00"
-    action:
-      - service: switch.turn_on
-        target:
-          entity_id:
-            - switch.zyxel_nwa50ax_guest_ssid
-            - switch.zyxel_nwa50ax_radio_2_4ghz
+Actions (radio/SSID toggle send their config command and read back the verification state in the same session; radio *activation* specifically uses separate sessions - see code comments for why):
 ```
-
-### Alert on AP Offline
-
-```yaml
-automation:
-  - alias: "Alert AP Offline"
-    trigger:
-      - platform: template
-        value_template: >
-          {{ (as_timestamp(now()) - as_timestamp(states('sensor.zyxel_nwa50ax_last_seen'))) > 300 }}
-    action:
-      - service: notify.mobile_app
-        data:
-          title: "⚠️ AP Offline"
-          message: "Last seen {{ ((as_timestamp(now()) - as_timestamp(states('sensor.zyxel_nwa50ax_last_seen'))) / 60) | round(1) }} minutes ago"
-```
-
-### Alert on High CPU
-
-```yaml
-automation:
-  - alias: "Alert NWA50AX High CPU"
-    trigger:
-      - platform: numeric_state
-        entity_id: sensor.zyxel_nwa50ax_cpu_usage
-        above: 80
-        for:
-          minutes: 5
-    action:
-      - service: notify.mobile_app
-        data:
-          title: "⚠️ NWA50AX High CPU"
-          message: "CPU at {{ states('sensor.zyxel_nwa50ax_cpu_usage') }}% for 5 minutes"
-```
-
-## 🔧 SSH Commands Used
-
-The integration uses the following validated SSH commands:
-
-### Data Collection
-- `show version` - Model, firmware, build date
-- `show system uptime` - Uptime since last reboot
-- `show cpu all` - CPU usage per core + averages
-- `show mem status` - Memory usage percentage
-- `show wireless-hal station info` - Connected WiFi clients (detailed)
-- `show interface all` - Network interfaces status
-- `show wlan all` - Radio status and SSIDs
-- `show port status` - Ethernet port statistics
-
-### Control Commands
-
-**Radio 2.4GHz (slot1 / profile default)**:
-```bash
 configure terminal
-wlan-radio-profile default
-activate          # Turn on
-# or
-no activate       # Turn off
+wlan slot1|slot2
+[no ]activate
 exit
-write
-```
+exit
 
-**Radio 5GHz (slot2 / profile default2)**:
-```bash
 configure terminal
-wlan-radio-profile default2
-activate          # Turn on
-# or
-no activate       # Turn off
+wlan-ssid-profile <name>
+[no ]ssid-schedule
 exit
-write
+write        # Guest only, to match its historical persistent behavior
 ```
 
-**Guest SSID Schedule**:
-```bash
-configure terminal
-wlan-ssid-profile Guest
-ssid-schedule     # Enable schedule
-# or
-no ssid-schedule  # Disable schedule (always on)
-exit
-write
+## Testing
+
+`tests/fixtures/` contains real CLI output captured from a physical NWA50AX, used as regression fixtures so a firmware update or a future code change can be checked against known-good output without needing the physical device. See `tests/README.md`.
+
+## Troubleshooting
+
+**Options page fails to open ("500 Internal Server Error")**: usually means Home Assistant Core hasn't picked up the latest integration code - do a full HA restart (not just "reload"), not just replacing the files.
+
+**Integration won't connect**: verify SSH is enabled on the AP, test manually with `ssh admin@<ap_ip>`, then check logs:
+```yaml
+logger:
+  logs:
+    custom_components.ha_zyxel: debug
 ```
 
-## 🐛 Troubleshooting
+**"La clé SSH ... a changé" / SSH host key changed error**: the AP's SSH key no longer matches what was memorized. If you didn't replace/factory-reset the AP, treat this as a potential security issue on your LAN before resetting the fingerprint. If the change is legitimate, go to Configure → Security and reset the corresponding fingerprint.
 
-### Integration won't connect
+**No hostnames for WiFi clients**: enable and configure the MikroTik resolver (Configure → MikroTik). Plain reverse DNS was removed - see the "Data assignment" section above for why.
 
-1. Verify SSH is enabled on the NWA50AX
-2. Test SSH manually: `ssh admin@<your_ap_ip>`
-3. Check the logs: `tail -f /config/home-assistant.log | grep ha_zyxel`
-4. Enable debug logging:
-   ```yaml
-   logger:
-     logs:
-       custom_components.ha_zyxel: debug
-   ```
+## License
 
-### Switches not working / "Socket is closed" errors
+MIT - see LICENSE.
 
-This was fixed in v1.1.0. Update to the latest version.
+## Credits
 
-### No hostnames for clients
-
-- Requires working reverse DNS on your network
-- If reverse DNS fails, hostname will be `null`
-- May slightly slow data collection (1s timeout per client)
-
-### Radio switches take time to apply
-
-- Changes take **30-120 seconds** to apply on the AP
-- Switch state refreshes automatically after action
-- Disabling a radio disables **all SSIDs** on that band
-
-## ⚙️ Configuration Options
-
-### Update Interval
-
-Configurable during setup: 30-300 seconds (default: 60s)
-
-- **Minimum**: 30 seconds (avoid AP overload)
-- **Maximum**: 300 seconds (5 minutes)
-- **Recommended**: 60 seconds (balance between responsiveness and load)
-
-## 📝 Notes
-
-- All configuration changes are saved to the AP (persistent across reboots)
-- Radio control affects all SSIDs on that band
-- Guest SSID switch only affects schedule activation
-- Hostname lookup may add 1-2 seconds to data collection
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 👏 Credits
-
-- Original inspiration from [ha-zyxel](https://github.com/zulufoxtrot/ha-zyxel) (for NR7101 router)
-- Optimized for NWA50AX standalone mode
-
-## 📞 Support
-
-If you encounter issues:
-1. Check the [Troubleshooting](#-troubleshooting) section
-2. Enable debug logging
-3. Open an issue with logs and details
-
-## 🔄 Changelog
-
-### Version 1.1.0 (2026-02-04)
-
-**✨ New Features**:
-- Client hostnames via reverse DNS
-- Configurable update interval (30-300s)
-- Radio 2.4GHz control switch
-- Radio 5GHz control switch
-- Last Seen timestamp sensor
-- Formatted uptime display (Xd Xh Xm)
-
-**🔧 Fixes**:
-- Fixed "Socket is closed" errors with batch command execution
-- Stable switch operations for radios and Guest SSID
-
-**📦 Entities**:
-- 18 sensors (including new Last Seen)
-- 3 switches (Guest SSID + 2 radios)
-- 1 button
-- Total: 20 entities
-
-### Version 1.0.2 (2026-02-02)
-- Increased data fetch timeout from 30s to 50s
-- Fixed entities not appearing due to timeout
-
-### Version 1.0.1 (2026-02-02)
-- Fixed SSH timeout issues using paramiko
-- Switched from asyncssh to paramiko for better compatibility
-
-### Version 1.0.0 (2026-02-02)
-- Initial release
-- 17 sensors for comprehensive monitoring
-- Guest SSID control switch
-- Reboot button
-- Optimized for NWA50AX V7.10(ABYW.3)
+Original inspiration from [ha-zyxel](https://github.com/zulufoxtrot/ha-zyxel) (for the NR7101 router). Adapted and substantially rewritten for the NWA50AX in standalone mode.
