@@ -22,6 +22,19 @@ CONF_MIKROTIK_USERNAME = "mikrotik_username"
 CONF_MIKROTIK_PASSWORD = "mikrotik_password"
 CONF_MIKROTIK_REFRESH_INTERVAL = "mikrotik_refresh_interval"
 
+# Empreintes SSH mémorisées (TOFU - Trust On First Use). Stockées dans les
+# options de l'entry : ce sont des empreintes publiques (pas des secrets),
+# comparées à chaque connexion pour détecter un changement de clé côté AP ou
+# MikroTik (remplacement de matériel légitime, OU tentative de MITM sur le LAN).
+CONF_SSH_FINGERPRINT = "ssh_fingerprint"
+CONF_MIKROTIK_SSH_FINGERPRINT = "mikrotik_ssh_fingerprint"
+
+# Cases à cocher "action ponctuelle" dans les options (section Sécurité) :
+# jamais persistées telles quelles, juste lues une fois à la sauvegarde pour
+# effacer l'empreinte mémorisée correspondante.
+CONF_RESET_SSH_FINGERPRINT = "reset_ssh_fingerprint"
+CONF_RESET_MIKROTIK_SSH_FINGERPRINT = "reset_mikrotik_ssh_fingerprint"
+
 # Defaults - Connexion
 DEFAULT_HOST = "192.168.1.2"
 DEFAULT_USERNAME = "admin"
@@ -113,6 +126,24 @@ DEFAULT_ITEM_GROUPS: dict[str, str] = {
 
 # Préfixe des clés d'options HA, une par item : "item_group_radio", etc.
 CONF_ITEM_GROUP_PREFIX = "item_group_"
+
+# ----------------------------------------------------------------------------
+# Timings CLI SSH - centralisés ici plutôt que dispersés en littéraux dans le
+# code (point de revue #5 : facilite le tuning si le comportement réel de
+# l'AP change, sans avoir à chasser des nombres magiques dans plusieurs
+# fonctions).
+# ----------------------------------------------------------------------------
+CLI_CONNECT_TIMEOUT = 10        # Timeout de connexion TCP+SSH (secondes)
+CLI_INITIAL_DELAY = 1.0         # Après invoke_shell, avant la 1re commande
+CLI_SETTLE_DEFAULT = 1.5        # Délai par défaut après une commande "show"
+CLI_SETTLE_CONFIG = 1.0         # Délai après une commande de config courte
+CLI_SETTLE_RADIO_VERIFY = 4.0   # Délai avant de relire l'état radio après désactivation
+CLI_SETTLE_SLOW_READ = 2.5      # Délai pour les commandes de lecture les plus lentes (radio, clients)
+CLI_SETTLE_WRITE = 8.0          # Délai après un 'write' (persistance NVRAM)
+CLI_READ_IDLE_ROUNDS = 3        # Nb d'intervalles sans données avant d'arrêter de lire
+CLI_READ_IDLE_PAUSE = 0.3       # Durée d'un intervalle d'attente pendant la lecture
+CLI_READ_MAX_WAIT = 8.0         # Plafond dur de lecture par commande (secondes)
+CLI_CLOSE_DELAY = 0.5           # Délai avant fermeture de session après 'exit'
 
 # Attributes (device_info)
 ATTR_DEVICE_MODEL = "device_model"
