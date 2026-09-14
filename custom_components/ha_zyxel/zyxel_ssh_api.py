@@ -1,4 +1,9 @@
-"""API client for Zyxel NWA50AX via SSH - Optimized for V7.10(ABYW.3).
+"""API client for Zyxel NWA50AX via SSH.
+
+Firmware validé (voir tests/fixtures/) :
+- 7.10(ABYW.3) - via la documentation constructeur et le CLI Reference Guide
+- 7.12(ABYW.0) - via des captures CLI réelles, aucune rupture de format
+  détectée sur les commandes utilisées par cette intégration.
 
 Architecture (v2) :
 - Toutes les lectures d'un même "groupe" (fast/slow/daily) sont regroupées dans
@@ -16,6 +21,14 @@ Architecture (v2) :
   injectée via `set_hostname_resolver()`, un simple callback synchrone et non
   bloquant (lookup de cache), alimenté par un composant totalement séparé
   (voir mikrotik_resolver.py) qui a sa propre connexion et son propre cycle.
+- La clé hôte SSH est mémorisée au premier contact et vérifiée ensuite
+  (TOFU - voir ssh_security.py), plutôt qu'acceptée sans condition à chaque
+  connexion.
+- Une valeur numérique/booléenne non déterminée (échec de parsing, format
+  inattendu) est représentée par `None`, jamais par 0/False : ces deux
+  dernières valeurs doivent rester réservées à une mesure réelle. Une donnée
+  manquante qui ressemblerait à une vraie mesure serait plus trompeuse qu'une
+  absence de donnée explicite.
 """
 import asyncio
 import logging
@@ -33,6 +46,17 @@ from .const import (
     PRIORITY_WRITE,
     BACKOFF_BASE_SECONDS,
     BACKOFF_MAX_SECONDS,
+    CLI_CLOSE_DELAY,
+    CLI_CONNECT_TIMEOUT,
+    CLI_INITIAL_DELAY,
+    CLI_READ_IDLE_PAUSE,
+    CLI_READ_IDLE_ROUNDS,
+    CLI_READ_MAX_WAIT,
+    CLI_SETTLE_CONFIG,
+    CLI_SETTLE_DEFAULT,
+    CLI_SETTLE_RADIO_VERIFY,
+    CLI_SETTLE_SLOW_READ,
+    CLI_SETTLE_WRITE,
     DATA_ITEMS,
     DATA_ITEM_CLIENTS,
     DATA_ITEM_CPU,
@@ -45,6 +69,7 @@ from .const import (
     DATA_ITEM_UPTIME,
     DEFAULT_ITEM_GROUPS,
 )
+from .ssh_security import PinnedHostKeyPolicy, SSHHostKeyChangedError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,6 +80,14 @@ try:
 except ImportError:
     HAS_PARAMIKO = False
     _LOGGER.error("paramiko not installed. Please install: pip install paramiko")
+
+
+class ZyxelAuthError(Exception):
+    """Levée quand l'AP refuse les identifiants (mot de passe erroné/changé).
+
+    Distincte de ZyxelConnectionError (hôte injoignable) pour permettre à
+    __init__.py de déclencher un flux `reauth` HA plutôt qu'un simple retry.
+    """
 
 
 @dataclass
@@ -124,6 +157,12 @@ class ZyxelSSHAPI:
             lambda mac, ip: None
         )
 
+        # Empreinte de clé hôte SSH mémorisée (TOFU) - branchée par __init__.py
+        # depuis les options de l'entry. None tant qu'aucune connexion n'a
+        # encore réussi.
+        self._pinned_fingerprint: Optional[str] = None
+        self._on_fingerprint_pinned: Callable[[str], None] = lambda fp: None
+
         if not HAS_PARAMIKO:
             raise ImportError(
                 "paramiko is not installed. "
@@ -139,6 +178,25 @@ class ZyxelSSHAPI:
         elle-même se fait ailleurs, de façon totalement découplée de ce client SSH.
         """
         self._hostname_resolver = resolver or (lambda mac, ip: None)
+
+    def set_pinned_fingerprint(self, fingerprint: Optional[str]) -> None:
+        """Empreinte SSH déjà connue (persistée côté HA), ou None si jamais vue."""
+        self._pinned_fingerprint = fingerprint
+
+    def set_fingerprint_pinned_callback(self, callback: Optional[Callable[[str], None]]) -> None:
+        """Callback appelé la première fois qu'une empreinte est mémorisée (TOFU),
+        pour que l'appelant (HA) la persiste dans les options de l'entry."""
+        self._on_fingerprint_pinned = callback or (lambda fp: None)
+
+    def _make_host_key_policy(self) -> PinnedHostKeyPolicy:
+        def _get_pinned() -> Optional[str]:
+            return self._pinned_fingerprint
+
+        def _on_trust(fingerprint: str) -> None:
+            self._pinned_fingerprint = fingerprint
+            self._on_fingerprint_pinned(fingerprint)
+
+        return PinnedHostKeyPolicy(_get_pinned, _on_trust)
 
     # ------------------------------------------------------------------
     # File d'attente SSH
@@ -190,7 +248,36 @@ class ZyxelSSHAPI:
         return await future
 
     async def async_shutdown(self) -> None:
-        """Shutdown queue worker cleanly."""
+        """Shutdown propre : vide la file, annule le travail en attente, puis le worker.
+
+        Avant (point de revue #7) : seul le worker était annulé, en laissant
+        d'éventuelles opérations encore en file (et leurs futures associées)
+        sans résolution explicite. Sans conséquence en usage normal de HA,
+        mais plus correct de tout annuler proprement à l'unload :
+
+            stop accepting new work (implicite : plus personne n'appelle
+            _queue_ssh_operation après unload côté HA)
+                -> cancel queued operations
+                -> cancel pending futures
+                -> cancel l'opération en cours
+                -> cancel le worker
+        """
+        # Vide la file et annule chaque future en attente
+        while not self._ssh_queue.empty():
+            try:
+                _, _, operation_name, _, future = self._ssh_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if not future.done():
+                _LOGGER.debug("Annulation de l'opération en attente '%s' (shutdown)", operation_name)
+                future.cancel()
+            self._ssh_queue.task_done()
+
+        # Annule l'opération éventuellement en cours d'exécution
+        if self._current_operation_task and not self._current_operation_task.done():
+            self._current_operation_task.cancel()
+
+        # Puis le worker lui-même
         if self._queue_task and not self._queue_task.done():
             self._queue_task.cancel()
             try:
@@ -229,7 +316,15 @@ class ZyxelSSHAPI:
     # ------------------------------------------------------------------
 
     async def async_connect(self) -> bool:
-        """Test SSH connection to the device."""
+        """Test SSH connection to the device.
+
+        Lève `ZyxelAuthError` si l'AP refuse explicitement les identifiants
+        (mot de passe erroné/changé) - distinct d'un simple retour False pour
+        les autres échecs (hôte injoignable, timeout), afin que __init__.py
+        puisse déclencher un flux `reauth` HA plutôt qu'un retry aveugle.
+        Lève `SSHHostKeyChangedError` si la clé hôte SSH a changé depuis la
+        dernière connexion réussie (voir ssh_security.py).
+        """
         try:
             result = await asyncio.get_event_loop().run_in_executor(
                 None, self._test_connection
@@ -237,6 +332,8 @@ class ZyxelSSHAPI:
             if result:
                 _LOGGER.info("Successfully tested SSH connection to %s", self.host)
             return result
+        except (ZyxelAuthError, SSHHostKeyChangedError):
+            raise
         except Exception as err:
             _LOGGER.error("SSH connection test failed: %s", err)
             return False
@@ -244,7 +341,7 @@ class ZyxelSSHAPI:
     def _test_connection(self) -> bool:
         """Test SSH connection synchronously."""
         ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.set_missing_host_key_policy(self._make_host_key_policy())
 
         try:
             ssh.connect(
@@ -252,12 +349,17 @@ class ZyxelSSHAPI:
                 port=self.port,
                 username=self.username,
                 password=self.password,
-                timeout=10,
+                timeout=CLI_CONNECT_TIMEOUT,
                 look_for_keys=False,
                 allow_agent=False
             )
             ssh.close()
             return True
+        except paramiko.AuthenticationException as err:
+            _LOGGER.error("Authentification SSH refusée par %s: %s", self.host, err)
+            raise ZyxelAuthError(f"Authentification refusée par {self.host}") from err
+        except SSHHostKeyChangedError:
+            raise
         except Exception as err:
             _LOGGER.error("Connection test failed: %s", err)
             return False
@@ -269,9 +371,9 @@ class ZyxelSSHAPI:
     def _read_available(
         self,
         shell,
-        idle_rounds: int = 3,
-        idle_pause: float = 0.3,
-        max_total_wait: float = 8.0,
+        idle_rounds: int = CLI_READ_IDLE_ROUNDS,
+        idle_pause: float = CLI_READ_IDLE_PAUSE,
+        max_total_wait: float = CLI_READ_MAX_WAIT,
     ) -> str:
         """Draine tout ce qui est disponible sur le canal shell.
 
@@ -319,7 +421,7 @@ class ZyxelSSHAPI:
         d'une session unique bien plus rapide.
         """
         if settle_delays is None:
-            settle_delays = [1.0] * len(commands)
+            settle_delays = [CLI_SETTLE_DEFAULT] * len(commands)
         elif len(settle_delays) != len(commands):
             raise ValueError("settle_delays doit avoir la même longueur que commands")
 
@@ -329,19 +431,19 @@ class ZyxelSSHAPI:
 
         try:
             ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.set_missing_host_key_policy(self._make_host_key_policy())
             ssh.connect(
                 self.host,
                 port=self.port,
                 username=self.username,
                 password=self.password,
-                timeout=10,
+                timeout=CLI_CONNECT_TIMEOUT,
                 look_for_keys=False,
                 allow_agent=False,
             )
 
             shell = ssh.invoke_shell()
-            time.sleep(1)
+            time.sleep(CLI_INITIAL_DELAY)
             if shell.recv_ready():
                 shell.recv(8192)  # bannière / prompt initial
 
@@ -353,10 +455,12 @@ class ZyxelSSHAPI:
                 outputs[idx] = self._clean_output(raw, cmd) if capture else ""
 
             shell.send("exit\n")
-            time.sleep(0.5)
+            time.sleep(CLI_CLOSE_DELAY)
 
             return outputs
 
+        except (paramiko.AuthenticationException, SSHHostKeyChangedError):
+            raise
         except Exception as err:
             _LOGGER.error(
                 "Session SSH multi-commandes échouée (%d commande(s)): %s",
@@ -381,10 +485,20 @@ class ZyxelSSHAPI:
         settle_delays: Optional[list[float]] = None,
         capture: bool = True,
     ) -> Optional[list[str]]:
-        """Exécute une session multi-commandes dans l'executor, et alimente le backoff."""
-        result = await asyncio.get_event_loop().run_in_executor(
-            None, self._execute_session_sync, commands, settle_delays, capture
-        )
+        """Exécute une session multi-commandes dans l'executor, et alimente le backoff.
+
+        Une authentification refusée est reconvertie en `ZyxelAuthError` ici -
+        seul endroit qui a besoin de connaître le type d'exception paramiko
+        sous-jacent - pour que le reste du code (et __init__.py) n'ait jamais
+        besoin d'importer paramiko directement.
+        """
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, self._execute_session_sync, commands, settle_delays, capture
+            )
+        except paramiko.AuthenticationException as err:
+            raise ZyxelAuthError(f"Authentification refusée par {self.host}") from err
+
         if result is None:
             self._on_session_failure()
         else:
@@ -480,6 +594,19 @@ class ZyxelSSHAPI:
     def get_item_groups(self) -> dict[str, str]:
         """Copie de la répartition actuelle des données entre groupes."""
         return dict(self._item_groups)
+
+    def get_diagnostics_snapshot(self) -> dict[str, Any]:
+        """Petit résumé interne pour diagnostics.py.
+
+        Volontairement dénué de tout MAC/IP/secret : juste de quoi comprendre
+        l'état de santé de la connexion (échecs consécutifs, backoff) et un
+        décompte (pas la liste) des SSIDs connus.
+        """
+        return {
+            "consecutive_failures": self._consecutive_failures,
+            "in_backoff": self._is_in_backoff(),
+            "known_ssid_count": len(self._known_ssids),
+        }
 
     async def _async_get_group_data_direct(self, group: str) -> dict[str, Any]:
         """Récupère, en UNE session SSH, tous les items actuellement affectés à `group`.
@@ -583,23 +710,23 @@ class ZyxelSSHAPI:
                 data["device_info"] = self._parse_version(outputs[0])
 
         return {
-            DATA_ITEM_RADIO: _DataItemSpec(lambda: ["show wlan all"], 2.5, _apply_radio),
+            DATA_ITEM_RADIO: _DataItemSpec(lambda: ["show wlan all"], CLI_SETTLE_SLOW_READ, _apply_radio),
             DATA_ITEM_CLIENTS: _DataItemSpec(
-                lambda: ["show wireless-hal station info"], 2.5, _apply_clients
+                lambda: ["show wireless-hal station info"], CLI_SETTLE_SLOW_READ, _apply_clients
             ),
-            DATA_ITEM_CPU: _DataItemSpec(lambda: ["show cpu all"], 1.5, _apply_cpu),
-            DATA_ITEM_MEMORY: _DataItemSpec(lambda: ["show mem status"], 1.5, _apply_memory),
-            DATA_ITEM_UPTIME: _DataItemSpec(lambda: ["show system uptime"], 1.5, _apply_uptime),
+            DATA_ITEM_CPU: _DataItemSpec(lambda: ["show cpu all"], CLI_SETTLE_DEFAULT, _apply_cpu),
+            DATA_ITEM_MEMORY: _DataItemSpec(lambda: ["show mem status"], CLI_SETTLE_DEFAULT, _apply_memory),
+            DATA_ITEM_UPTIME: _DataItemSpec(lambda: ["show system uptime"], CLI_SETTLE_DEFAULT, _apply_uptime),
             DATA_ITEM_INTERFACES: _DataItemSpec(
-                lambda: ["show interface all"], 1.5, _apply_interfaces
+                lambda: ["show interface all"], CLI_SETTLE_DEFAULT, _apply_interfaces
             ),
-            DATA_ITEM_PORT: _DataItemSpec(lambda: ["show port status"], 1.5, _apply_port),
+            DATA_ITEM_PORT: _DataItemSpec(lambda: ["show port status"], CLI_SETTLE_DEFAULT, _apply_port),
             DATA_ITEM_SSID_SCHEDULES: _DataItemSpec(
                 lambda: [f"show wlan-ssid-profile {name}" for name in self._known_ssids],
-                1.5,
+                CLI_SETTLE_DEFAULT,
                 _apply_ssid_schedules,
             ),
-            DATA_ITEM_DEVICE_INFO: _DataItemSpec(lambda: ["show version"], 1.5, _apply_device_info),
+            DATA_ITEM_DEVICE_INFO: _DataItemSpec(lambda: ["show version"], CLI_SETTLE_DEFAULT, _apply_device_info),
         }
 
     # ------------------------------------------------------------------
@@ -614,53 +741,54 @@ class ZyxelSSHAPI:
             "build_date": "Unknown",
         }
 
-        model_match = re.search(r'model\s*:\s*(.+)', output)
+        model_match = re.search(r'(?i)model\s*:\s*(.+)', output)
         if model_match:
             info["model"] = model_match.group(1).strip()
 
-        firmware_match = re.search(r'firmware version\s*:\s*(.+)', output)
+        firmware_match = re.search(r'(?i)firmware\s+version\s*:\s*(.+)', output)
         if firmware_match:
             info["firmware"] = firmware_match.group(1).strip()
 
-        build_match = re.search(r'build date\s*:\s*(.+)', output)
+        build_match = re.search(r'(?i)build\s+date\s*:\s*(.+)', output)
         if build_match:
             info["build_date"] = build_match.group(1).strip()
 
         return info
 
-    def _parse_uptime(self, output: str) -> int:
-        """Parse 'show system uptime' output. Returns uptime in seconds."""
-        uptime_seconds = 0
-
-        match = re.search(r'(\d+)\s+days?\s+(\d+):(\d+):(\d+)', output)
+    def _parse_uptime(self, output: str) -> Optional[int]:
+        """Parse 'show system uptime' output. Returns uptime in seconds, or
+        None si le format n'a pas pu être reconnu (plutôt que 0, qui serait
+        indiscernable d'un AP qui viendrait tout juste de redémarrer)."""
+        match = re.search(r'(\d+)\s+days?\s+(\d+):(\d+):(\d+)', output, re.IGNORECASE)
         if match:
-            days = int(match.group(1))
-            hours = int(match.group(2))
-            minutes = int(match.group(3))
-            seconds = int(match.group(4))
-            uptime_seconds = days * 86400 + hours * 3600 + minutes * 60 + seconds
-        else:
-            match = re.search(r'(\d+):(\d+):(\d+)', output)
-            if match:
-                hours = int(match.group(1))
-                minutes = int(match.group(2))
-                seconds = int(match.group(3))
-                uptime_seconds = hours * 3600 + minutes * 60 + seconds
+            days, hours, minutes, seconds = (int(g) for g in match.groups())
+            return days * 86400 + hours * 3600 + minutes * 60 + seconds
 
-        return uptime_seconds
+        match = re.search(r'(\d+):(\d+):(\d+)', output)
+        if match:
+            hours, minutes, seconds = (int(g) for g in match.groups())
+            return hours * 3600 + minutes * 60 + seconds
+
+        return None
 
     def _parse_cpu(self, output: str) -> dict[str, Any]:
-        """Parse 'show cpu all' output."""
-        cpu_data = {
-            "current": 0,
-            "avg_1min": 0,
-            "avg_5min": 0,
+        """Parse 'show cpu all' output.
+
+        `current`/`avg_1min`/`avg_5min` sont None si aucun cœur n'a pu être
+        extrait (plutôt que 0, qui laisserait croire à une mesure réelle de
+        0% d'utilisation). Fonctionne quel que soit le nombre de cœurs (2 ou 4
+        selon le modèle/firmware - vu 4 cœurs en 7.12 contre l'hypothèse
+        initiale de 2)."""
+        cpu_data: dict[str, Any] = {
+            "current": None,
+            "avg_1min": None,
+            "avg_5min": None,
             "cores": [],
         }
 
-        core_pattern = r'CPU core (\d+) utilization:\s*(\d+)\s*%'
-        core_1min_pattern = r'CPU core (\d+) utilization for 1 min:\s*(\d+)\s*%'
-        core_5min_pattern = r'CPU core (\d+) utilization for 5 min:\s*(\d+)\s*%'
+        core_pattern = r'(?i)CPU\s+core\s+(\d+)\s+utilization:\s*(\d+)\s*%'
+        core_1min_pattern = r'(?i)CPU\s+core\s+(\d+)\s+utilization\s+for\s+1\s*min:\s*(\d+)\s*%'
+        core_5min_pattern = r'(?i)CPU\s+core\s+(\d+)\s+utilization\s+for\s+5\s*min:\s*(\d+)\s*%'
 
         cores_current = re.findall(core_pattern, output)
         cores_1min = re.findall(core_1min_pattern, output)
@@ -678,12 +806,13 @@ class ZyxelSSHAPI:
 
         return cpu_data
 
-    def _parse_memory(self, output: str) -> int:
-        """Parse 'show mem status' output. Returns percentage."""
-        match = re.search(r'memory usage:\s*(\d+)\s*%', output)
+    def _parse_memory(self, output: str) -> Optional[int]:
+        """Parse 'show mem status' output. Returns percentage, or None si le
+        format n'a pas pu être reconnu (plutôt que 0)."""
+        match = re.search(r'(?i)memory\s+usage\s*:\s*(\d+)\s*%', output)
         if match:
             return int(match.group(1))
-        return 0
+        return None
 
     def _parse_clients(self, output: str) -> list[dict[str, Any]]:
         """Parse 'show wireless-hal station info' output.
@@ -725,7 +854,12 @@ class ZyxelSSHAPI:
             if rssi_match:
                 client["rssi_percent"] = int(rssi_match.group(1))
 
-            band_match = re.search(r'Band:\s*([\dG.Hz]+)', block)
+            # Le format du champ Band varie ("2.4G"/"5G" selon la doc, "2.4GHz"
+            # /"5GHz" observé en 7.12) - le code qui consomme cette valeur
+            # (compteurs par bande, device_tracker) teste une sous-chaîne
+            # ("2.4" / "5"), donc les deux formats fonctionnent. On capture
+            # largement pour rester tolérant à d'éventuelles variantes futures.
+            band_match = re.search(r'Band:\s*(\S+)', block)
             if band_match:
                 client["band"] = band_match.group(1)
 
@@ -763,18 +897,18 @@ class ZyxelSSHAPI:
 
     def _parse_interfaces(self, output: str) -> dict[str, Any]:
         """Parse 'show interface all' output."""
-        network = {
-            "ip_address": "Unknown",
-            "netmask": "Unknown",
+        network: dict[str, Any] = {
+            "ip_address": None,
+            "netmask": None,
             "interfaces": [],
         }
 
-        lan_match = re.search(r'lan\s+Up\s+([\d.]+)\s+([\d.]+)', output)
+        lan_match = re.search(r'(?i)lan\s+Up\s+([\d.]+)\s+([\d.]+)', output)
         if lan_match:
             network["ip_address"] = lan_match.group(1)
             network["netmask"] = lan_match.group(2)
 
-        interface_lines = re.findall(r'(\d+)\s+(\S+)\s+(Up|Down|n/a)\s+([\d.]+|n/a)', output)
+        interface_lines = re.findall(r'(\d+)\s+(\S+)\s+(Up|Down|n/a)\s+([\d.]+|n/a)', output, re.IGNORECASE)
         for iface in interface_lines:
             network["interfaces"].append({
                 "name": iface[1],
@@ -785,60 +919,77 @@ class ZyxelSSHAPI:
         return network
 
     def _parse_wlan(self, output: str) -> dict[str, Any]:
-        """Parse 'show wlan all' output."""
-        radio = {
-            "slot1_active": False,
+        """Parse 'show wlan all' output.
+
+        `slot1_active`/`slot2_active` sont None si le format n'a pas pu être
+        reconnu - PAS False, qui laisserait croire à tort que la radio a été
+        interrogée avec succès et trouvée désactivée."""
+        radio: dict[str, Any] = {
+            "slot1_active": None,
             "slot1_band": "Unknown",
             "slot1_ssids": [],
-            "slot2_active": False,
+            "slot2_active": None,
             "slot2_band": "Unknown",
             "slot2_ssids": [],
         }
 
-        slot1_match = re.search(r'slot: slot1.*?Activate: (\w+).*?Band: ([\dG.]+)', output, re.DOTALL)
+        slot1_match = re.search(
+            r'(?i)slot:\s*slot1.*?Activate:\s*(\w+).*?Band:\s*([\dG.]+)', output, re.DOTALL
+        )
         if slot1_match:
             radio["slot1_active"] = slot1_match.group(1).lower() == "yes"
             radio["slot1_band"] = slot1_match.group(2)
 
-        slot1_block = re.search(r'slot: slot1(.*?)(?:slot: slot2|$)', output, re.DOTALL)
+        slot1_block = re.search(r'slot:\s*slot1(.*?)(?:slot:\s*slot2|$)', output, re.DOTALL | re.IGNORECASE)
         if slot1_block:
-            ssids = re.findall(r'SSID_profile_\d+:\s*(\S+)', slot1_block.group(1))
+            # [ \t]* (pas \s*) : \s inclut le saut de ligne, ce qui faisait
+            # "déborder" la capture sur le libellé du CHAMP SUIVANT quand un
+            # profil SSID est vide (ex: "SSID_profile_5:\n SSID_profile_6:"
+            # capturait à tort "SSID_profile_6:" comme valeur du profil 5).
+            # Bug latent trouvé via les fixtures 7.12 (4 SSIDs + profils vides
+            # en fin de liste, jamais exercé par les données de test précédentes).
+            ssids = re.findall(r'SSID_profile_\d+:[ \t]*(\S+)', slot1_block.group(1))
             radio["slot1_ssids"] = [s for s in ssids if s]
 
-        slot2_match = re.search(r'slot: slot2.*?Activate: (\w+).*?Band: ([\dG.]+)', output, re.DOTALL)
+        slot2_match = re.search(
+            r'(?i)slot:\s*slot2.*?Activate:\s*(\w+).*?Band:\s*([\dG.]+)', output, re.DOTALL
+        )
         if slot2_match:
             radio["slot2_active"] = slot2_match.group(1).lower() == "yes"
             radio["slot2_band"] = slot2_match.group(2)
 
-        slot2_block = re.search(r'slot: slot2(.*?)$', output, re.DOTALL)
+        slot2_block = re.search(r'slot:\s*slot2(.*?)$', output, re.DOTALL | re.IGNORECASE)
         if slot2_block:
-            ssids = re.findall(r'SSID_profile_\d+:\s*(\S+)', slot2_block.group(1))
+            ssids = re.findall(r'SSID_profile_\d+:[ \t]*(\S+)', slot2_block.group(1))
             radio["slot2_ssids"] = [s for s in ssids if s]
 
         return radio
 
     def _parse_radio_slot_active(self, output: str, slot: int) -> Optional[bool]:
         """Extrait uniquement l'état Activate: yes/no d'un slot depuis 'show wlan all'."""
-        match = re.search(rf"slot: slot{slot}.*?Activate: (\w+)", output, re.DOTALL)
+        match = re.search(rf"(?i)slot:\s*slot{slot}.*?Activate:\s*(\w+)", output, re.DOTALL)
         return (match.group(1).lower() == "yes") if match else None
 
     def _parse_ssid_schedule_mode(self, output: str) -> Optional[bool]:
         """Extrait SSID_schedule_mode: yes/no depuis 'show wlan-ssid-profile <name>'."""
-        match = re.search(r'SSID_schedule_mode:\s*(\w+)', output)
+        match = re.search(r'(?i)SSID_schedule_mode:\s*(\w+)', output)
         if not match:
             return None
         return match.group(1).lower() == "yes"
 
     def _parse_port_status(self, output: str) -> dict[str, Any]:
-        """Parse 'show port status' output."""
-        port = {
-            "status": "Unknown",
-            "speed": "Unknown",
-            "tx_bytes": 0,
-            "rx_bytes": 0,
-            "tx_rate": 0,
-            "rx_rate": 0,
-            "uptime": "Unknown",
+        """Parse 'show port status' output.
+
+        Les champs numériques (tx_rate/rx_rate/tx_bytes/rx_bytes) sont None si
+        le format n'a pas pu être reconnu, jamais 0."""
+        port: dict[str, Any] = {
+            "status": None,
+            "speed": None,
+            "tx_bytes": None,
+            "rx_bytes": None,
+            "tx_rate": None,
+            "rx_rate": None,
+            "uptime": None,
         }
 
         port_match = re.search(
@@ -869,7 +1020,7 @@ class ZyxelSSHAPI:
             outputs = await self._queue_ssh_operation(
                 PRIORITY_WRITE,
                 "action:reboot",
-                lambda: self._async_execute_session_direct(["reboot"], settle_delays=[2.0]),
+                lambda: self._async_execute_session_direct(["reboot"], settle_delays=[CLI_SETTLE_CONFIG * 2]),
             )
             if outputs is not None:
                 _LOGGER.info("Reboot command sent")
@@ -885,7 +1036,7 @@ class ZyxelSSHAPI:
             outputs = await self._queue_ssh_operation(
                 PRIORITY_WRITE,
                 f"radio:state:slot{slot}",
-                lambda: self._async_execute_session_direct(["show wlan all"], settle_delays=[2.5]),
+                lambda: self._async_execute_session_direct(["show wlan all"], settle_delays=[CLI_SETTLE_SLOW_READ]),
             )
             if not outputs or not outputs[0]:
                 return None
@@ -908,7 +1059,7 @@ class ZyxelSSHAPI:
                 self._queue_ssh_operation(
                     PRIORITY_WRITE,
                     "radio:ap_responsive_check",
-                    lambda: self._async_execute_session_direct(["show version"], settle_delays=[1.5]),
+                    lambda: self._async_execute_session_direct(["show version"], settle_delays=[CLI_SETTLE_DEFAULT]),
                 ),
                 timeout=15,
             )
@@ -943,10 +1094,10 @@ class ZyxelSSHAPI:
         ]
         verify_cmd = "show wlan all"
         all_commands = base_commands + [verify_cmd]
-        verify_delay = 4.0
+        verify_delay = CLI_SETTLE_RADIO_VERIFY
 
         for attempt in (1, 2):
-            settle_delays = [1.0, 1.0, 1.0, 1.0, 1.0, verify_delay]
+            settle_delays = [CLI_SETTLE_CONFIG] * 5 + [verify_delay]
             outputs = await self._queue_ssh_operation(
                 PRIORITY_WRITE,
                 f"action:radio:slot{slot}:deactivate:attempt{attempt}",
@@ -970,7 +1121,7 @@ class ZyxelSSHAPI:
                 "Radio slot %d pas encore désactivée (tentative %d/2, état lu=%s)",
                 slot, attempt, current_state,
             )
-            verify_delay += 3.0  # un peu plus de marge au 2e essai
+            verify_delay += CLI_SETTLE_RADIO_VERIFY * 0.75  # un peu plus de marge au 2e essai
 
         _LOGGER.error("Radio slot %d: échec après toutes les tentatives", slot)
         return False
@@ -984,7 +1135,7 @@ class ZyxelSSHAPI:
             "exit",
             "exit",
         ]
-        settle_delays = [1.0, 1.0, 1.0, 1.0, 1.0]
+        settle_delays = [CLI_SETTLE_CONFIG] * 5
 
         for attempt in (1, 2):
             _LOGGER.info("Radio slot %d: envoi de la commande activate (tentative %d/2)", slot, attempt)
@@ -1035,7 +1186,7 @@ class ZyxelSSHAPI:
             outputs = await self._queue_ssh_operation(
                 PRIORITY_ADHOC,
                 "ssid_list:adhoc",
-                lambda: self._async_execute_session_direct(["show wlan all"], settle_delays=[2.5]),
+                lambda: self._async_execute_session_direct(["show wlan all"], settle_delays=[CLI_SETTLE_SLOW_READ]),
             )
             if outputs and outputs[0]:
                 radio = self._parse_wlan(outputs[0])
@@ -1055,7 +1206,7 @@ class ZyxelSSHAPI:
                 PRIORITY_ADHOC,
                 f"ssid_schedule:state:{ssid_name}",
                 lambda: self._async_execute_session_direct(
-                    [f"show wlan-ssid-profile {ssid_name}"], settle_delays=[2.0]
+                    [f"show wlan-ssid-profile {ssid_name}"], settle_delays=[CLI_SETTLE_CONFIG * 2]
                 ),
             )
             if not outputs or not outputs[0]:
@@ -1088,9 +1239,9 @@ class ZyxelSSHAPI:
             verify_cmd = f"show wlan-ssid-profile {ssid_name}"
             all_commands = commands + [verify_cmd]
 
-            base_delay = 1.0
-            write_delay = 8.0 if persist else 1.0
-            verify_delay = 3.0 + (attempt - 1) * 3.0
+            base_delay = CLI_SETTLE_CONFIG
+            write_delay = CLI_SETTLE_WRITE if persist else CLI_SETTLE_CONFIG
+            verify_delay = CLI_SETTLE_RADIO_VERIFY * 0.75 + (attempt - 1) * (CLI_SETTLE_RADIO_VERIFY * 0.75)
             settle_delays = [base_delay, base_delay, base_delay, base_delay, write_delay, verify_delay]
 
             _LOGGER.info("SSID '%s': %s schedule (tentative %d/2)", ssid_name, action, attempt)
