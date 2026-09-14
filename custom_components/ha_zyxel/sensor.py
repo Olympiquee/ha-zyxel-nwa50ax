@@ -104,10 +104,12 @@ class ZyxelUptimeSensor(ZyxelBaseSensor):
 
     @property
     def native_value(self) -> str | None:
-        """Return formatted uptime."""
+        """Return formatted uptime. None si non déterminé (distinct de 0s réel)."""
         status = self.coordinator.data.get("status", {})
-        uptime_seconds = status.get("uptime", 0)
+        uptime_seconds = status.get("uptime")
 
+        if uptime_seconds is None:
+            return None
         if uptime_seconds == 0:
             return "0s"
 
@@ -129,7 +131,10 @@ class ZyxelUptimeSensor(ZyxelBaseSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional attributes."""
         status = self.coordinator.data.get("status", {})
-        uptime_seconds = status.get("uptime", 0)
+        uptime_seconds = status.get("uptime")
+
+        if uptime_seconds is None:
+            return {"uptime_seconds": None, "days": None, "hours": None, "minutes": None, "seconds": None}
 
         days = uptime_seconds // 86400
         hours = (uptime_seconds % 86400) // 3600
@@ -249,7 +254,7 @@ class ZyxelCPUSensor(ZyxelBaseSensor):
     def native_value(self) -> int | None:
         status = self.coordinator.data.get("status", {})
         cpu_data = status.get("cpu", {})
-        return cpu_data.get("current", 0)
+        return cpu_data.get("current")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -280,7 +285,7 @@ class ZyxelCPU1MinSensor(ZyxelBaseSensor):
     @property
     def native_value(self) -> int | None:
         status = self.coordinator.data.get("status", {})
-        return status.get("cpu", {}).get("avg_1min", 0)
+        return status.get("cpu", {}).get("avg_1min")
 
 
 class ZyxelCPU5MinSensor(ZyxelBaseSensor):
@@ -299,7 +304,7 @@ class ZyxelCPU5MinSensor(ZyxelBaseSensor):
     @property
     def native_value(self) -> int | None:
         status = self.coordinator.data.get("status", {})
-        return status.get("cpu", {}).get("avg_5min", 0)
+        return status.get("cpu", {}).get("avg_5min")
 
 
 class ZyxelMemorySensor(ZyxelBaseSensor):
@@ -317,7 +322,7 @@ class ZyxelMemorySensor(ZyxelBaseSensor):
     @property
     def native_value(self) -> int | None:
         status = self.coordinator.data.get("status", {})
-        return status.get("memory", 0)
+        return status.get("memory")
 
 
 # ============================================================================
@@ -427,15 +432,15 @@ class ZyxelPortStatusSensor(ZyxelBaseSensor):
     def native_value(self) -> str:
         network = self.coordinator.data.get("network", {})
         port = network.get("port", {})
-        return port.get("status", "Unknown")
+        return port.get("status")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         network = self.coordinator.data.get("network", {})
         port = network.get("port", {})
         return {
-            "speed": port.get("speed", "Unknown"),
-            "uptime": port.get("uptime", "Unknown"),
+            "speed": port.get("speed"),
+            "uptime": port.get("uptime"),
         }
 
 
@@ -456,7 +461,7 @@ class ZyxelPortTxRateSensor(ZyxelBaseSensor):
     def native_value(self) -> int:
         network = self.coordinator.data.get("network", {})
         port = network.get("port", {})
-        return port.get("tx_rate", 0)
+        return port.get("tx_rate")
 
 
 class ZyxelPortRxRateSensor(ZyxelBaseSensor):
@@ -476,7 +481,7 @@ class ZyxelPortRxRateSensor(ZyxelBaseSensor):
     def native_value(self) -> int:
         network = self.coordinator.data.get("network", {})
         port = network.get("port", {})
-        return port.get("rx_rate", 0)
+        return port.get("rx_rate")
 
 
 class ZyxelPortTxBytesSensor(ZyxelBaseSensor):
@@ -497,7 +502,7 @@ class ZyxelPortTxBytesSensor(ZyxelBaseSensor):
     def native_value(self) -> int:
         network = self.coordinator.data.get("network", {})
         port = network.get("port", {})
-        return port.get("tx_bytes", 0)
+        return port.get("tx_bytes")
 
 
 class ZyxelPortRxBytesSensor(ZyxelBaseSensor):
@@ -518,7 +523,7 @@ class ZyxelPortRxBytesSensor(ZyxelBaseSensor):
     def native_value(self) -> int:
         network = self.coordinator.data.get("network", {})
         port = network.get("port", {})
-        return port.get("rx_bytes", 0)
+        return port.get("rx_bytes")
 
 
 # ============================================================================
@@ -536,9 +541,11 @@ class ZyxelSlot1StatusSensor(ZyxelBaseSensor):
         return f"{self._config_entry.entry_id}_slot1_status"
 
     @property
-    def native_value(self) -> str:
-        radio = self.coordinator.data.get("radio", {})
-        return "Active" if radio.get("slot1_active") else "Inactive"
+    def native_value(self) -> str | None:
+        active = self.coordinator.data.get("radio", {}).get("slot1_active")
+        if active is None:
+            return None
+        return "Active" if active else "Inactive"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -560,9 +567,11 @@ class ZyxelSlot2StatusSensor(ZyxelBaseSensor):
         return f"{self._config_entry.entry_id}_slot2_status"
 
     @property
-    def native_value(self) -> str:
-        radio = self.coordinator.data.get("radio", {})
-        return "Active" if radio.get("slot2_active") else "Inactive"
+    def native_value(self) -> str | None:
+        active = self.coordinator.data.get("radio", {}).get("slot2_active")
+        if active is None:
+            return None
+        return "Active" if active else "Inactive"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
