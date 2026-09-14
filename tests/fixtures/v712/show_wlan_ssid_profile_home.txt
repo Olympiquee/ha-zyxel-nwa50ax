@@ -1,0 +1,30 @@
+ssid profile: Home
+  reference: 2
+  Id: 3
+  Description:
+  Block_Intra_BSS: no
+  Hide_ssid: no
+  SSID: MyHome
+  QoS_mode: wmm
+  Downlink_rate_limit: no
+  Uplink_rate_limit: no
+  Forward_mode: localbridge
+  SSID_VLAN_id: 20
+  Security_profile: Securite_Home
+  Captive_profile:
+  Whitelist_profile:
+  MACFilter_profile:
+  Band_Select_mode: disable
+  Band_Select_balance_ratio: 0
+  Band_Select_stop_threshold: 0
+  L2Isolation_profile:
+  UAPSD: yes
+  WalledGarden_profile:
+  GuestSSID_profile:
+  SSID_schedule_mode: yes
+  AP_Proxy_ARP: no
+  Dot11k_v: no
+  Guest_ssid: no
+  Band_2g: yes
+  Band_5g: yes
+  Radius_attr_wispr_bw: no

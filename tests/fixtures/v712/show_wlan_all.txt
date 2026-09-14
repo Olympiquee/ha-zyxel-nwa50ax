@@ -1,0 +1,54 @@
+slot: slot1
+ card: none
+ Role: ap
+ Profile: default
+ SSID_profile_1: Home
+ SSID_profile_2: Guest
+ SSID_profile_3: IoT
+ SSID_profile_4: Studio
+ SSID_profile_5:
+ SSID_profile_6:
+ SSID_profile_7:
+ SSID_profile_8:
+ SLOT_1_Output_power: 30dBm
+ Activate: yes
+ WDS_Role: none
+ WDS_Profile: default
+ WDS_uplink: auto
+ WDS_Downlink: unlimited
+ Band: 2.4G
+ SSID_profile_1_band: 2.4G/5G
+ SSID_profile_2_band: 2.4G
+ SSID_profile_3_band: 2.4G
+ SSID_profile_4_band: 2.4G
+ SSID_profile_5_band:
+ SSID_profile_6_band:
+ SSID_profile_7_band:
+ SSID_profile_8_band:
+slot: slot2
+ card: none
+ Role: ap
+ Profile: default2
+ SSID_profile_1: Home
+ SSID_profile_2: Guest
+ SSID_profile_3: IoT
+ SSID_profile_4:
+ SSID_profile_5:
+ SSID_profile_6:
+ SSID_profile_7:
+ SSID_profile_8:
+ SLOT_2_Output_power: 30dBm
+ Activate: yes
+ WDS_Role: none
+ WDS_Profile: default
+ WDS_uplink: auto
+ WDS_Downlink: unlimited
+ Band: 5G
+ SSID_profile_1_band: 2.4G/5G
+ SSID_profile_2_band: 2.4G
+ SSID_profile_3_band: 2.4G
+ SSID_profile_4_band:
+ SSID_profile_5_band:
+ SSID_profile_6_band:
+ SSID_profile_7_band:
+ SSID_profile_8_band:

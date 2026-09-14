@@ -1,0 +1,30 @@
+ssid profile: IoT
+  reference: 2
+  Id: 4
+  Description:
+  Block_Intra_BSS: yes
+  Hide_ssid: no
+  SSID: MyHome_IoT
+  QoS_mode: wmm_bk
+  Downlink_rate_limit: no
+  Uplink_rate_limit: no
+  Forward_mode: localbridge
+  SSID_VLAN_id: 30
+  Security_profile: Securite_IoT
+  Captive_profile:
+  Whitelist_profile:
+  MACFilter_profile:
+  Band_Select_mode: disable
+  Band_Select_balance_ratio: 0
+  Band_Select_stop_threshold: 0
+  L2Isolation_profile:
+  UAPSD: no
+  WalledGarden_profile:
+  GuestSSID_profile:
+  SSID_schedule_mode: no
+  AP_Proxy_ARP: no
+  Dot11k_v: no
+  Guest_ssid: no
+  Band_2g: yes
+  Band_5g: no
+  Radius_attr_wispr_bw: no

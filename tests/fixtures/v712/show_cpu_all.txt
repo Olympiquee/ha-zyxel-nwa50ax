@@ -1,0 +1,12 @@
+CPU core 0 utilization: 1 %
+CPU core 0 utilization for 1 min: 3 %
+CPU core 0 utilization for 5 min: 3 %
+CPU core 1 utilization: 2 %
+CPU core 1 utilization for 1 min: 4 %
+CPU core 1 utilization for 5 min: 3 %
+CPU core 2 utilization: 2 %
+CPU core 2 utilization for 1 min: 5 %
+CPU core 2 utilization for 5 min: 4 %
+CPU core 3 utilization: 2 %
+CPU core 3 utilization for 1 min: 2 %
+CPU core 3 utilization for 5 min: 3 %

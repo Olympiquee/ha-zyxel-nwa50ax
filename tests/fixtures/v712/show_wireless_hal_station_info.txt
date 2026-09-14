@@ -1,0 +1,64 @@
+index: 0
+  MAC: aa:bb:cc:00:00:01
+  IPv4: 10.0.20.208
+  Slot: 1
+  SSID: MyHome
+  Security: WPA3-Personal
+  TxRate: 172M
+  RxRate: 229M
+  RSSI: 80
+  RSSI dBm: -60
+  Time: 2026/09/09 12:57:46
+  VapIdx: 1
+  Capability: 802.11ax
+  DOT11 features: 11v
+  Display SSID: MyHome
+  Band: 2.4GHz
+index: 1
+  MAC: aa:bb:cc:00:00:02
+  IPv4: 10.0.20.210
+  Slot: 1
+  SSID: MyHome
+  Security: WPA3-Personal
+  TxRate: 86M
+  RxRate: 78M
+  RSSI: 80
+  RSSI dBm: -60
+  Time: 2026/09/09 12:28:16
+  VapIdx: 1
+  Capability: 802.11b/g/n
+  DOT11 features: 11k/v
+  Display SSID: MyHome
+  Band: 2.4GHz
+index: 3
+  MAC: aa:bb:cc:00:00:03
+  IPv4: 10.0.30.247
+  Slot: 1
+  SSID: MyHome_IoT
+  Security: WPA2-PSK
+  TxRate: 72M
+  RxRate: 36M
+  RSSI: 100
+  RSSI dBm: -37
+  Time: 2026/09/09 08:37:18
+  VapIdx: 3
+  Capability: 802.11b/g/n
+  DOT11 features: N/A
+  Display SSID: MyHome_IoT
+  Band: 2.4GHz
+index: 0
+  MAC: aa:bb:cc:00:00:04
+  IPv4: 10.0.20.214
+  Slot: 2
+  SSID: MyHome
+  Security: WPA3-Personal
+  TxRate: 480M
+  RxRate: 480M
+  RSSI: 92
+  RSSI dBm: -54
+  Time: 2026/09/09 10:59:44
+  VapIdx: 1
+  Capability: 802.11ax
+  DOT11 features: N/A
+  Display SSID: MyHome
+  Band: 5GHz

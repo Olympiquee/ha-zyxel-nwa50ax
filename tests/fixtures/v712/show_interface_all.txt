@@ -1,0 +1,12 @@
+No. Name            Status              IP Address      Mask            IP Assignment
+===============================================================================
+2   lan             Up                  10.0.20.2       255.255.255.0   DHCP client
+3   wlan-1          n/a                 n/a             n/a             n/a
+4   wlan-1-1        Up                  0.0.0.0         0.0.0.0         static
+5   wlan-1-2        Up                  0.0.0.0         0.0.0.0         static
+6   wlan-1-3        Up                  0.0.0.0         0.0.0.0         static
+7   wlan-1-4        Up                  0.0.0.0         0.0.0.0         static
+8   wlan-2          n/a                 n/a             n/a             n/a
+9   wlan-2-1        Up                  0.0.0.0         0.0.0.0         static
+10  wlan-2-2        Up                  0.0.0.0         0.0.0.0         static
+11  wlan-2-3        Up                  0.0.0.0         0.0.0.0         static
