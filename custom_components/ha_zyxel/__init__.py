@@ -47,7 +47,12 @@ PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.BUTTON, Platform.DEVICE_
 
 
 def _persist_option(hass: HomeAssistant, entry: ConfigEntry, key: str, value) -> None:
-    """Écrit une clé dans les options de l'entry sans perturber les autres."""
+    """Écrit une clé dans les options de l'entry sans perturber les autres.
+
+    DOIT être appelé depuis l'event loop (async_update_entry est un @callback).
+    Les classes API garantissent que leur callback d'empreinte l'est - voir
+    ZyxelSSHAPI._flush_pending_fingerprint.
+    """
     hass.config_entries.async_update_entry(entry, options={**entry.options, key: value})
 
 
@@ -255,6 +260,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry when options change."""
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+    """Reload config entry when options change.
+
+    Utilise le rechargement standard de HA (et non un unload+setup manuel) :
+    il sérialise correctement les rechargements concurrents et exécute les
+    callbacks `async_on_unload`, donc retire le listener d'options de
+    l'instance précédente. Avec l'ancien unload+setup manuel, chaque
+    rechargement empilait un listener de plus, et un rechargement déclenché
+    pendant qu'un autre était en cours pouvait planter (KeyError sur
+    hass.data) - risque réel lors de la réinitialisation d'une empreinte SSH.
+    """
+    await hass.config_entries.async_reload(entry.entry_id)
