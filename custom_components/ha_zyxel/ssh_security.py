@@ -71,7 +71,12 @@ class PinnedHostKeyPolicy(paramiko.MissingHostKeyPolicy):
                 "Nouvelle clé SSH mémorisée pour %s (première connexion) : %s",
                 hostname, fingerprint,
             )
-            self._on_first_trust(fingerprint)
+            try:
+                self._on_first_trust(fingerprint)
+            except Exception as err:
+                # Mémoriser l'empreinte est un effet de bord : son échec ne
+                # doit jamais empêcher la connexion elle-même.
+                _LOGGER.warning("Empreinte SSH de %s non mémorisée : %s", hostname, err)
             return
 
         if fingerprint != pinned:
