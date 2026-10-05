@@ -162,6 +162,9 @@ class ZyxelSSHAPI:
         # encore réussi.
         self._pinned_fingerprint: Optional[str] = None
         self._on_fingerprint_pinned: Callable[[str], None] = lambda fp: None
+        # Nouvelle empreinte vue dans un thread executor, en attente d'être
+        # notifiée à l'appelant côté event loop (voir _flush_pending_fingerprint).
+        self._pending_fingerprint: Optional[str] = None
 
         if not HAS_PARAMIKO:
             raise ImportError(
@@ -185,7 +188,13 @@ class ZyxelSSHAPI:
 
     def set_fingerprint_pinned_callback(self, callback: Optional[Callable[[str], None]]) -> None:
         """Callback appelé la première fois qu'une empreinte est mémorisée (TOFU),
-        pour que l'appelant (HA) la persiste dans les options de l'entry."""
+        pour que l'appelant (HA) la persiste dans les options de l'entry.
+
+        Garantie : ce callback est TOUJOURS appelé depuis l'event loop, jamais
+        depuis le thread executor de paramiko (Home Assistant interdit d'appeler
+        `hass.config_entries.async_update_entry` hors de l'event loop). Voir
+        `_flush_pending_fingerprint`.
+        """
         self._on_fingerprint_pinned = callback or (lambda fp: None)
 
     def _make_host_key_policy(self) -> PinnedHostKeyPolicy:
@@ -193,10 +202,34 @@ class ZyxelSSHAPI:
             return self._pinned_fingerprint
 
         def _on_trust(fingerprint: str) -> None:
+            # Exécuté dans le thread executor de paramiko : on ne fait QUE
+            # mémoriser en mémoire. Surtout pas d'appel à HA ici - la
+            # notification part côté event loop, après la fin du thread.
             self._pinned_fingerprint = fingerprint
-            self._on_fingerprint_pinned(fingerprint)
+            self._pending_fingerprint = fingerprint
 
         return PinnedHostKeyPolicy(_get_pinned, _on_trust)
+
+    def _flush_pending_fingerprint(self) -> None:
+        """Notifie l'appelant d'une nouvelle empreinte. À appeler UNIQUEMENT
+        depuis l'event loop, après le retour d'un appel dans l'executor.
+
+        Un échec du callback (persistance impossible) est journalisé mais ne
+        remet jamais en cause la connexion SSH, qui a déjà réussi : la
+        sauvegarde de l'empreinte est un effet de bord, pas une condition de
+        la connexion.
+        """
+        fingerprint = self._pending_fingerprint
+        if fingerprint is None:
+            return
+        self._pending_fingerprint = None
+        try:
+            self._on_fingerprint_pinned(fingerprint)
+        except Exception as err:
+            _LOGGER.warning(
+                "Empreinte SSH %s mémorisée en mémoire mais non persistée : %s",
+                fingerprint, err,
+            )
 
     # ------------------------------------------------------------------
     # File d'attente SSH
@@ -337,6 +370,8 @@ class ZyxelSSHAPI:
         except Exception as err:
             _LOGGER.error("SSH connection test failed: %s", err)
             return False
+        finally:
+            self._flush_pending_fingerprint()
 
     def _test_connection(self) -> bool:
         """Test SSH connection synchronously."""
@@ -498,6 +533,8 @@ class ZyxelSSHAPI:
             )
         except paramiko.AuthenticationException as err:
             raise ZyxelAuthError(f"Authentification refusée par {self.host}") from err
+        finally:
+            self._flush_pending_fingerprint()
 
         if result is None:
             self._on_session_failure()
