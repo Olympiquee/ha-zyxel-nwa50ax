@@ -76,6 +76,8 @@ class MikrotikHostnameResolver:
         # que pour la connexion Zyxel, branchée par __init__.py.
         self._pinned_fingerprint: Optional[str] = None
         self._on_fingerprint_pinned: Callable[[str], None] = lambda fp: None
+        # Empreinte vue dans le thread executor, à notifier côté event loop.
+        self._pending_fingerprint: Optional[str] = None
 
         if not HAS_PARAMIKO:
             _LOGGER.error(
@@ -95,10 +97,28 @@ class MikrotikHostnameResolver:
             return self._pinned_fingerprint
 
         def _on_trust(fingerprint: str) -> None:
+            # Exécuté dans le thread executor de paramiko : mémoriser
+            # seulement. La notification à HA part côté event loop.
             self._pinned_fingerprint = fingerprint
-            self._on_fingerprint_pinned(fingerprint)
+            self._pending_fingerprint = fingerprint
 
         return PinnedHostKeyPolicy(_get_pinned, _on_trust)
+
+    def _flush_pending_fingerprint(self) -> None:
+        """Notifie l'appelant d'une nouvelle empreinte - UNIQUEMENT depuis
+        l'event loop (Home Assistant interdit `async_update_entry` ailleurs).
+        Un échec de persistance est journalisé, jamais bloquant."""
+        fingerprint = self._pending_fingerprint
+        if fingerprint is None:
+            return
+        self._pending_fingerprint = None
+        try:
+            self._on_fingerprint_pinned(fingerprint)
+        except Exception as err:
+            _LOGGER.warning(
+                "Empreinte SSH MikroTik %s mémorisée en mémoire mais non persistée : %s",
+                fingerprint, err,
+            )
 
     async def async_start(self) -> None:
         """Démarre la boucle de rafraîchissement en tâche de fond."""
@@ -128,7 +148,10 @@ class MikrotikHostnameResolver:
                 _LOGGER.warning("MikroTik resolver: échec du rafraîchissement (%s)", err)
 
     async def _async_refresh_once(self) -> None:
-        raw = await self.hass.async_add_executor_job(self._fetch_leases_sync)
+        try:
+            raw = await self.hass.async_add_executor_job(self._fetch_leases_sync)
+        finally:
+            self._flush_pending_fingerprint()
         if raw is None:
             # Échec de connexion : on garde le cache précédent tel quel plutôt
             # que de le vider (mieux vaut un nom potentiellement un peu
