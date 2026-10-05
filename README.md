@@ -1,7 +1,7 @@
 # Zyxel NWA50AX Home Assistant Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)
+![Version](https://img.shields.io/badge/version-2.3.1-blue.svg)
 
 Home Assistant custom integration for a **Zyxel NWA50AX** WiFi access point (standalone mode) over SSH.
 
