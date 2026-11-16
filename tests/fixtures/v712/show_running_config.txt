@@ -1,0 +1,277 @@
+!
+!
+hybrid-mode standalone
+!
+hardware-watchdog-timer start
+!
+software-watchdog-timer 30
+!
+interface-name ge1 ge1
+!
+interface-name br0 lan
+!
+username admin encrypted-password $5$FAKESALT$FAKEADMINHASH0000FAKEADMINHASH0000FAKEADMINHASH0000 user-type admin
+username admin description Administration account
+!
+nat prefix 172
+!
+interface vlan20
+ port ge1
+ vlan-id 20 untag
+!
+interface lan
+ forward-delay 0
+ join vlan20
+ ip address dhcp
+!
+default country-code DE
+!
+wlan-wds-profile default
+ ssid Zyxel_WDS
+ encrypted-psk FAKEWDSPSK0000=
+!
+wlan-security-profile default
+ mode enhanced-open
+ dot11w activate
+ dot11w-op 2
+!
+wlan-security-profile Securite_Home
+ mode wpa3
+ eap external
+ dot11w activate
+ dot11w-op 1
+ idle 300
+ encrypted-wpa-psk FAKEHOMEPSK0001=FAKEHOMEPSK0002=FAKEHOMEPSK0003=
+ wpa-encrypt aes
+ group-key 30000
+ transition-mode
+!
+wlan-security-profile Securite_guest
+ mode wpa2-mix
+ eap external
+ dot11w-op 1
+ idle 300
+ encrypted-wpa-psk FAKEGUESTPSK001=FAKEGUESTPSK002=
+ wpa-encrypt aes
+ group-key 30000
+ transition-mode
+!
+wlan-security-profile Securite_IoT
+ mode wpa2-mix
+ eap external
+ idle 300
+ encrypted-wpa-psk FAKEIOTPSK00001=FAKEIOTPSK00002=
+ wpa-encrypt auto
+ group-key 30000
+!
+wlan-security-profile Studio
+ mode wpa3
+ eap external
+ dot11w activate
+ dot11w-op 1
+ idle 300
+ encrypted-wpa-psk FAKESTUDIOPSK01=FAKESTUDIOPSK02=
+ wpa-encrypt aes
+ group-key 30000
+ transition-mode
+!
+wlan-ssid-profile default
+ ssid MyHome
+ data-forward localbridge
+ qos wmm
+ security Securite_Home
+ band 2.4G 5G
+ vlan-id 20
+ uapsd
+!
+wlan-ssid-profile Guest
+ band 2.4G
+ ssid MyHome_guest
+ security Securite_guest
+ qos wmm_bk
+ downlink-rate-limit 0 mbps
+ uplink-rate-limit 0 mbps
+ data-forward localbridge
+ vlan-id 10
+ block-intra
+ uapsd
+ mon disable 00:00 24:00
+ tue disable 00:00 24:00
+ wed disable 00:00 24:00
+ thu disable 00:00 24:00
+ fri disable 00:00 24:00
+ sat disable 00:00 24:00
+ sun disable 00:00 24:00
+ ssid-schedule
+!
+wlan-ssid-profile Home
+ band 2.4G 5G
+ ssid MyHome
+ security Securite_Home
+ qos wmm
+ downlink-rate-limit 0 mbps
+ uplink-rate-limit 0 mbps
+ data-forward localbridge
+ vlan-id 20
+ uapsd
+ mon enable 06:30 22:00
+ tue enable 06:30 22:00
+ wed enable 06:30 22:00
+ thu enable 06:30 22:00
+ fri enable 06:30 23:00
+ sat enable 07:00 23:00
+ sun enable 07:00 23:00
+ ssid-schedule
+!
+wlan-ssid-profile IoT
+ band 2.4G
+ ssid MyHome_IoT
+ security Securite_IoT
+ qos wmm_bk
+ downlink-rate-limit 0 mbps
+ uplink-rate-limit 0 mbps
+ data-forward localbridge
+ vlan-id 30
+ mon enable 06:00 21:00
+ tue enable 06:00 21:00
+ wed enable 06:00 21:00
+ thu enable 06:00 21:00
+ fri enable 06:00 21:00
+ sat enable 06:00 21:00
+ sun enable 06:00 21:00
+ block-intra
+!
+wlan-ssid-profile Studio
+ band 2.4G
+ ssid MyHome_Studio
+ security Studio
+ qos wmm_bk
+ downlink-rate-limit 0 mbps
+ uplink-rate-limit 0 mbps
+ data-forward localbridge
+ vlan-id 10
+ mon enable 00:00 24:00
+ tue enable 00:00 24:00
+ wed enable 00:00 24:00
+ thu enable 00:00 24:00
+ fri enable 00:00 24:00
+ sat enable 00:00 24:00
+ sun enable 00:00 24:00
+ block-intra
+ uapsd
+!
+wlan-radio-profile default
+ subframe-ampdu 64
+ role ap
+ band 2.4G band-mode bgnax
+ 2g-channel 6
+ ch-width 20/40
+ dtim-period 1
+ beacon-interval 100
+ ampdu
+ limit-ampdu 50000
+ rssi-dbm -82
+ rssi-kickout -88
+ tx-mask 7
+ rx-mask 7
+ dcs activate
+ dcs time-interval 720
+ dcs mode schedule
+ dcs schedule 06:30 mon tue wed thu fri sat sun
+ multicast-to-unicast
+ country-code DE
+ activate
+!
+wlan-radio-profile default2
+ subframe-ampdu 64
+ activate
+ role ap
+ band 5G band-mode anacax
+ 2g-channel 6
+ 5g-channel 36
+ ch-width 20/40/80
+ dtim-period 1
+ beacon-interval 100
+ ampdu
+ limit-ampdu 50000
+ rssi-dbm -82
+ rssi-kickout -88
+ tx-mask 7
+ rx-mask 7
+ dcs activate
+ dcs time-interval 720
+ dcs mode schedule
+ dcs schedule 06:30 mon tue wed thu fri sat sun
+ multicast-to-unicast
+ country-code DE
+!
+wlan-radio-profile list
+ subframe-ampdu 64
+!
+manager ap bridge forward-delay 0
+manager ap bridge stp off
+manager ap vlan vlan-id 20 untag
+manager ap vlan ip address dhcp
+manager ap vlan managed-ip address 192.168.1.2 255.255.255.0
+manager ap vlan ipv6 enable
+manager ap ac-discovery disable
+!
+wlan slot1
+ ap profile default
+ output-power 30dBm
+ ssid profile 1 Home
+ ssid profile 2 Guest
+ ssid profile 3 IoT
+ activate
+ ssid profile 4 Studio
+!
+wlan slot2
+ ap profile default2
+ output-power 30dBm
+ ssid profile 1 Home
+ ssid profile 2 Guest
+ ssid profile 3 IoT
+ activate
+!
+rogue-ap detection
+ activate
+!
+rogue-ap containment
+ no activate
+!
+no load-balancing slot1 activate
+no load-balancing slot1 kickout
+load-balancing slot1 mode station
+load-balancing slot1 max sta 127
+no load-balancing slot2 activate
+no load-balancing slot2 kickout
+load-balancing slot2 mode station
+load-balancing slot2 max sta 127
+!
+ip http server
+!
+ip http secure-server cert default
+ip http secure-server
+ip http secure-server force-redirect
+!
+ip ssh server cert default
+ip ssh server
+!
+ip ftp server cert default
+!
+ntp server 0.pool.ntp.org
+ntp
+clock time-zone 01:00
+!
+users retry-limit
+users retry-count 5
+users lockout-period 30
+!
+app-watch-dog activate
+!
+netconf inactivate
+!
+led_locator blink-timer 10
+!
+led_suppress disable
+!
