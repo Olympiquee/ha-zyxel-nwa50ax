@@ -293,7 +293,11 @@ class ZyxelSSHAPI:
                     self._current_operation_task = asyncio.create_task(operation_coro())
 
                     result = await self._current_operation_task
-                    future.set_result(result)
+                    # The caller may have given up meanwhile (timeout, entry
+                    # unload, HA shutdown): its future is then already
+                    # cancelled and set_result() would raise InvalidStateError.
+                    if not future.done():
+                        future.set_result(result)
 
                     self._current_operation_task = None
                     self._current_operation_priority = None
@@ -304,7 +308,7 @@ class ZyxelSSHAPI:
                 self._current_operation_task = None
                 self._current_operation_priority = None
             except Exception as err:
-                if not future.cancelled():
+                if not future.done():
                     future.set_exception(err)
                 _LOGGER.error("SSH queue operation '%s' failed: %s", operation_name, err)
                 self._current_operation_task = None
