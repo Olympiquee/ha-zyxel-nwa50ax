@@ -10,6 +10,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from .config_baseline import ConfigBaseline
 from .const import (
     CONF_DAILY_INTERVAL,
     CONF_FAST_INTERVAL,
@@ -217,9 +218,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "Résolveur MikroTik activé mais configuration incomplète (host/user/password) - ignoré"
             )
 
+    # Configuration de référence du bouton Write (stockée masquée, jamais de secret)
+    config_baseline = ConfigBaseline(hass, entry.entry_id, api)
+    await config_baseline.async_load()
+
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "api": api,
+        "config_baseline": config_baseline,
         "coordinator_fast": coordinator_fast,
         "coordinator_slow": coordinator_slow,
         "coordinator_daily": coordinator_daily,
@@ -231,6 +237,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "resolver": resolver,
         "unsub_listeners": [],
     }
+
+    # Le switch Guest fait un `write` : la config en cours redevient identique à la
+    # config enregistrée, on reprend donc la référence (en tâche de fond).
+    hass.data[DOMAIN][entry.entry_id]["unsub_listeners"].append(
+        api.add_persist_listener(lambda: config_baseline.schedule_capture("guest_write"))
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -252,11 +264,20 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for unsub in data.get("unsub_listeners", []):
             unsub()
 
+        config_baseline = data.get("config_baseline")
+        if config_baseline:
+            config_baseline.async_shutdown()
+
         resolver = data.get("resolver")
         if resolver:
             await resolver.async_shutdown()
 
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Supprime la configuration de référence stockée avec l'entrée."""
+    await ConfigBaseline.async_remove_stored(hass, entry.entry_id)
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
