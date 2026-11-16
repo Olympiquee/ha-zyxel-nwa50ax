@@ -1,0 +1,87 @@
+slot: slot1
+ card: none
+ Role: ap
+ Profile: Wiz_Radio_24G
+ SSID_profile_1: Wiz_SSID_1
+ SSID_profile_2: 
+ SSID_profile_3: 
+ SSID_profile_4: 
+ SSID_profile_5: 
+ SSID_profile_6: 
+ SSID_profile_7: 
+ SSID_profile_8: 
+ SLOT_1_Output_power: 20dBm
+ Activate: yes
+ WDS_Role: none
+ WDS_Profile: default
+ WDS_uplink: auto
+ WDS_Downlink: unlimited
+ WDS_mlo_downlink: enable
+ WDS_mlo_uplink: enable
+ Band: 2.4G
+ SSID_profile_1_band: 2.4G/5G/6G
+ SSID_profile_2_band: 
+ SSID_profile_3_band: 
+ SSID_profile_4_band: 
+ SSID_profile_5_band: 
+ SSID_profile_6_band: 
+ SSID_profile_7_band: 
+ SSID_profile_8_band: 
+slot: slot2
+ card: none
+ Role: ap
+ Profile: Wiz_Radio_5G
+ SSID_profile_1: Wiz_SSID_1
+ SSID_profile_2: 
+ SSID_profile_3: 
+ SSID_profile_4: 
+ SSID_profile_5: 
+ SSID_profile_6: 
+ SSID_profile_7: 
+ SSID_profile_8: 
+ SLOT_2_Output_power: 30dBm
+ Activate: yes
+ WDS_Role: none
+ WDS_Profile: default
+ WDS_uplink: auto
+ WDS_Downlink: unlimited
+ WDS_mlo_downlink: enable
+ WDS_mlo_uplink: enable
+ Band: 5G
+ SSID_profile_1_band: 2.4G/5G/6G
+ SSID_profile_2_band: 
+ SSID_profile_3_band: 
+ SSID_profile_4_band: 
+ SSID_profile_5_band: 
+ SSID_profile_6_band: 
+ SSID_profile_7_band: 
+ SSID_profile_8_band: 
+slot: slot3
+ card: none
+ Role: ap
+ Profile: Wiz_Radio_6G
+ SSID_profile_1: Wiz_SSID_1
+ SSID_profile_2: 
+ SSID_profile_3: 
+ SSID_profile_4: 
+ SSID_profile_5: 
+ SSID_profile_6: 
+ SSID_profile_7: 
+ SSID_profile_8: 
+ SLOT_3_Output_power: 30dBm
+ Activate: yes
+ WDS_Role: none
+ WDS_Profile: default
+ WDS_uplink: auto
+ WDS_Downlink: unlimited
+ WDS_mlo_downlink: enable
+ WDS_mlo_uplink: enable
+ Band: 6G
+ SSID_profile_1_band: 2.4G/5G/6G
+ SSID_profile_2_band: 
+ SSID_profile_3_band: 
+ SSID_profile_4_band: 
+ SSID_profile_5_band: 
+ SSID_profile_6_band: 
+ SSID_profile_7_band: 
+ SSID_profile_8_band: 

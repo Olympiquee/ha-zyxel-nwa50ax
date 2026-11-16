@@ -1,4 +1,4 @@
-"""The Zyxel NWA50AX integration."""
+"""The Zyxel NWA access point integration (NWA50AX, NWA130BE)."""
 import asyncio
 import logging
 from datetime import timedelta
@@ -21,6 +21,7 @@ from .const import (
     CONF_MIKROTIK_REFRESH_INTERVAL,
     CONF_MIKROTIK_SSH_FINGERPRINT,
     CONF_MIKROTIK_USERNAME,
+    CONF_NAME,
     CONF_PASSWORD,
     CONF_SLOW_INTERVAL,
     CONF_SSH_FINGERPRINT,
@@ -101,7 +102,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # État partagé entre TOUTES les entités, indépendamment de quel coordinator
     # (fast/slow/daily) les alimente par ailleurs - voir entity_helpers.py.
-    shared_state = {"device_info": {}, "last_seen": None}
+    # "device_name" is only set for entries created with a name in the config
+    # flow; older entries keep their historical "Zyxel <model>" device name.
+    shared_state = {"device_info": {}, "last_seen": None, "device_name": entry.data.get(CONF_NAME)}
 
     # Verrou radio partagé (une seule instance par entry, dans hass.data
     # plutôt qu'un dict de module comme avant - un dict de module survivait

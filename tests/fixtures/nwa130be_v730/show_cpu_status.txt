@@ -1,0 +1,3 @@
+CPU utilization: 2 %
+CPU utilization for 1 min: 2 %
+CPU utilization for 5 min: 2 %

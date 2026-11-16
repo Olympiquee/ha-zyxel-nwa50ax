@@ -1,0 +1,27 @@
+Slot: 1
+  ReceivedPktCount: 2884958
+  TransmittedPktCount: 10395237
+  wlanReceivedByte: 642066063
+  wlanTransmittedByte: 2849388101
+  RetryCount: 0
+  FCSErrorCount: 0
+  TxPower: 19
+  Channel Utilization: 54
+Slot: 2
+  ReceivedPktCount: 42601740
+  TransmittedPktCount: 96066602
+  wlanReceivedByte: 13767862134
+  wlanTransmittedByte: 88945315340
+  RetryCount: 0
+  FCSErrorCount: 0
+  TxPower: 23
+  Channel Utilization: 9
+Slot: 3
+  ReceivedPktCount: 3491330
+  TransmittedPktCount: 17763042
+  wlanReceivedByte: 1269245396
+  wlanTransmittedByte: 13257162101
+  RetryCount: 0
+  FCSErrorCount: 0
+  TxPower: 23
+  Channel Utilization: 2

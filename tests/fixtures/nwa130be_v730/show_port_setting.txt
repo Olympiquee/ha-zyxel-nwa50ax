@@ -1,0 +1,4 @@
+Status      Name     Port VID    Negotiation Duplex Speed
+===============================================================================
+Active      UPLINK   n/a         auto        full   1000  
+Active      lan1     1           auto        full   1000  

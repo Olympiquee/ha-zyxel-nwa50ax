@@ -1,9 +1,13 @@
-"""API client for Zyxel NWA50AX via SSH.
+"""API client for Zyxel NWA access points (NWA50AX, NWA130BE) via SSH.
 
 Firmware validé (voir tests/fixtures/) :
-- 7.10(ABYW.3) - via la documentation constructeur et le CLI Reference Guide
-- 7.12(ABYW.0) - via des captures CLI réelles, aucune rupture de format
+- NWA50AX 7.10(ABYW.3) - via la documentation constructeur et le CLI Reference Guide
+- NWA50AX 7.12(ABYW.0) - via des captures CLI réelles, aucune rupture de format
   détectée sur les commandes utilisées par cette intégration.
+- NWA130BE V7.30(ACIL.4) - read path only, from anonymised real captures
+  (tests/fixtures/nwa130be_v730/): three radio slots (2.4/5/6 GHz), "Router>"
+  prompt, two Ethernet ports. The write path (radio on/off, SSID schedule) has
+  not been verified on this model.
 
 Architecture (v2) :
 - Toutes les lectures d'un même "groupe" (fast/slow/daily) sont regroupées dans
@@ -111,13 +115,46 @@ GROUP_PRIORITIES = {
     "daily": PRIORITY_DAILY,
 }
 
+# CLI prompt at the start of a line: any hostname, an optional mode in
+# parentheses, then '>' (user mode) or '#' (privileged/config mode), followed
+# by a space, the echoed command or the end of the line. Examples:
+# "Router>", "Router# show wlan all", "Router(config)#", "AP-1(config-wlan)#".
+CLI_PROMPT_RE = re.compile(r"^\s*([A-Za-z0-9][\w.\-]*(?:\([^)\n]*\))?[>#])(?=\s|$)")
+
+# Start of one radio block in "show wlan all" ("slot: slot1", "slot: slot3"...).
+# Tolerates the trailing "\r" a raw SSH shell leaves on each line.
+_WLAN_SLOT_RE = re.compile(r"(?im)^[ \t]*slot:[ \t]*slot(\d+)[ \t\r]*$")
+
+
+def find_cli_prompt(text: str) -> Optional[str]:
+    """Return the last CLI prompt found at the start of a line of `text`.
+
+    Used for diagnostics only (which mode the AP drops us in after login);
+    nothing in the read or write path depends on the result.
+    """
+    prompt = None
+    for line in (text or "").splitlines():
+        match = CLI_PROMPT_RE.match(line)
+        if match:
+            prompt = match.group(1)
+    return prompt
+
+
+def ssids_from_radio(radio: dict[str, Any]) -> list[str]:
+    """Sorted, de-duplicated SSID profile names used by any radio slot."""
+    names: set[str] = set()
+    slots = radio.get("slots") or [1, 2]
+    for slot in slots:
+        names.update(s for s in radio.get(f"slot{slot}_ssids", []) if s)
+    return sorted(names)
+
 
 class ZyxelConnectionError(Exception):
     """Levée quand une session SSH vers l'AP n'a pas pu être établie/menée à terme."""
 
 
 class ZyxelSSHAPI:
-    """Class to communicate with Zyxel NWA50AX via SSH."""
+    """Class to communicate with a Zyxel NWA access point via SSH."""
 
     def __init__(self, host: str, username: str, password: str, port: int = 22) -> None:
         """Initialize the API."""
@@ -144,6 +181,10 @@ class ZyxelSSHAPI:
         # Cache des SSIDs connus, alimenté par l'item "radio" (show wlan all),
         # quel que soit le groupe auquel cet item est actuellement affecté.
         self._known_ssids: list[str] = []
+
+        # Last CLI prompt seen after login (e.g. "Router>" or "Router#").
+        # Diagnostics only - see find_cli_prompt().
+        self._cli_prompt: Optional[str] = None
 
         # Répartition des données entre groupes fast/slow/daily - modifiable
         # depuis les options HA via set_item_groups(). Par défaut : le tri
@@ -252,7 +293,11 @@ class ZyxelSSHAPI:
                     self._current_operation_task = asyncio.create_task(operation_coro())
 
                     result = await self._current_operation_task
-                    future.set_result(result)
+                    # The caller may have given up meanwhile (timeout, entry
+                    # unload, HA shutdown): its future is then already
+                    # cancelled and set_result() would raise InvalidStateError.
+                    if not future.done():
+                        future.set_result(result)
 
                     self._current_operation_task = None
                     self._current_operation_priority = None
@@ -263,7 +308,7 @@ class ZyxelSSHAPI:
                 self._current_operation_task = None
                 self._current_operation_priority = None
             except Exception as err:
-                if not future.cancelled():
+                if not future.done():
                     future.set_exception(err)
                 _LOGGER.error("SSH queue operation '%s' failed: %s", operation_name, err)
                 self._current_operation_task = None
@@ -399,6 +444,24 @@ class ZyxelSSHAPI:
             _LOGGER.error("Connection test failed: %s", err)
             return False
 
+    async def async_fetch_device_info(self) -> Optional[dict[str, Any]]:
+        """Run 'show version' once and return the parsed model/firmware.
+
+        Meant for the config flow, on a throwaway API instance: it bypasses
+        the SSH queue (nothing else runs on that instance), so no queue worker
+        is left behind. Returns None if the AP could not be read.
+        """
+        try:
+            outputs = await self._async_execute_session_direct(
+                ["show version"], settle_delays=[CLI_SETTLE_DEFAULT]
+            )
+        except Exception as err:
+            _LOGGER.debug("Could not read 'show version' from %s: %s", self.host, err)
+            return None
+        if not outputs or not outputs[0]:
+            return None
+        return self._parse_version(outputs[0])
+
     async def async_disconnect(self) -> None:
         """Disconnect - not needed with paramiko (connections are per-session)."""
         await self.async_shutdown()
@@ -480,7 +543,11 @@ class ZyxelSSHAPI:
             shell = ssh.invoke_shell()
             time.sleep(CLI_INITIAL_DELAY)
             if shell.recv_ready():
-                shell.recv(8192)  # bannière / prompt initial
+                banner = shell.recv(8192).decode("utf-8", errors="ignore")  # bannière / prompt initial
+                # Remember the login prompt ("Router>" on the NWA130BE,
+                # "Router#" expected on the NWA50AX) for diagnostics. The
+                # commands below are sent the same way in either mode.
+                self._cli_prompt = find_cli_prompt(banner) or self._cli_prompt
 
             for idx, cmd in enumerate(commands):
                 _LOGGER.debug("Session SSH - envoi: %s", cmd)
@@ -564,7 +631,13 @@ class ZyxelSSHAPI:
         clean_lines = []
 
         for line in lines:
-            if any(prompt in line for prompt in ['Router(config)#', 'Router#', 'Router>']):
+            # Any prompt line ("Router>", "Router#", "Router(config)#", or a
+            # custom hostname), with or without the echoed command after it.
+            # The literal check keeps the previous behaviour for a prompt
+            # that is not at the start of the line.
+            if CLI_PROMPT_RE.match(line) or any(
+                prompt in line for prompt in ['Router(config)#', 'Router#', 'Router>']
+            ):
                 continue
             if line.strip() == command.strip():
                 continue
@@ -643,6 +716,7 @@ class ZyxelSSHAPI:
             "consecutive_failures": self._consecutive_failures,
             "in_backoff": self._is_in_backoff(),
             "known_ssid_count": len(self._known_ssids),
+            "cli_prompt": self._cli_prompt,
         }
 
     async def _async_get_group_data_direct(self, group: str) -> dict[str, Any]:
@@ -705,10 +779,7 @@ class ZyxelSSHAPI:
             if not output:
                 return
             data["radio"] = self._parse_wlan(output)
-            self._known_ssids = sorted(
-                {s for s in data["radio"].get("slot1_ssids", []) if s}
-                | {s for s in data["radio"].get("slot2_ssids", []) if s}
-            )
+            self._known_ssids = ssids_from_radio(data["radio"])
 
         def _apply_clients(data: dict, outputs: list[str]) -> None:
             output = outputs[0] if outputs else ""
@@ -733,7 +804,9 @@ class ZyxelSSHAPI:
 
         def _apply_port(data: dict, outputs: list[str]) -> None:
             if outputs and outputs[0]:
-                data.setdefault("network", {})["port"] = self._parse_port_status(outputs[0])
+                network = data.setdefault("network", {})
+                network["port"] = self._parse_port_status(outputs[0])
+                network["ports"] = self._parse_port_table(outputs[0])
 
         def _apply_ssid_schedules(data: dict, outputs: list[str]) -> None:
             schedules = {}
@@ -912,9 +985,16 @@ class ZyxelSSHAPI:
             if rx_match:
                 client["rx_rate"] = int(rx_match.group(1))
 
-            capability_match = re.search(r'Capability:\s*(.+)', block)
+            # [ \t]* (not \s*): an empty "Capability:" (seen on the NWA130BE,
+            # together with empty TxRate/RxRate) must not swallow the next line.
+            capability_match = re.search(r'Capability:[ \t]*(\S.*)', block)
             if capability_match:
                 client["capability"] = capability_match.group(1).strip()
+
+            # Multi-Link Operation (Wi-Fi 7, NWA130BE). Absent on the NWA50AX.
+            mlo_match = re.search(r'(?m)^[ \t]*MLO:[ \t]*(\w+)', block)
+            if mlo_match:
+                client["mlo"] = mlo_match.group(1).lower() == "yes"
 
             time_match = re.search(r'Time:\s*(.+)', block)
             if time_match:
@@ -955,12 +1035,34 @@ class ZyxelSSHAPI:
 
         return network
 
+    @staticmethod
+    def _split_wlan_slots(output: str) -> dict[int, str]:
+        """Split 'show wlan all' into {slot number: block text}.
+
+        Each block runs from its "slot: slotN" line to the next one (or the
+        end of the output), so a field is never read from a neighbouring
+        slot - whatever the number of radios (2 on the NWA50AX, 3 on the
+        NWA130BE).
+        """
+        starts = list(_WLAN_SLOT_RE.finditer(output or ""))
+        blocks: dict[int, str] = {}
+        for idx, match in enumerate(starts):
+            end = starts[idx + 1].start() if idx + 1 < len(starts) else len(output)
+            blocks.setdefault(int(match.group(1)), output[match.end():end])
+        return blocks
+
     def _parse_wlan(self, output: str) -> dict[str, Any]:
         """Parse 'show wlan all' output.
 
-        `slot1_active`/`slot2_active` sont None si le format n'a pas pu être
-        reconnu - PAS False, qui laisserait croire à tort que la radio a été
-        interrogée avec succès et trouvée désactivée."""
+        `slotN_active` sont None si le format n'a pas pu être reconnu - PAS
+        False, qui laisserait croire à tort que la radio a été interrogée avec
+        succès et trouvée désactivée.
+
+        Keys per detected slot N: slotN_active, slotN_band, slotN_ssids,
+        slotN_profile, slotN_output_power. slot1_* and slot2_* are always
+        present (historical keys used by entities and tests). "slots" lists
+        the slot numbers actually found in the output, in ascending order.
+        """
         radio: dict[str, Any] = {
             "slot1_active": None,
             "slot1_band": "Unknown",
@@ -968,43 +1070,47 @@ class ZyxelSSHAPI:
             "slot2_active": None,
             "slot2_band": "Unknown",
             "slot2_ssids": [],
+            "slots": [],
         }
 
-        slot1_match = re.search(
-            r'(?i)slot:\s*slot1.*?Activate:\s*(\w+).*?Band:\s*([\dG.]+)', output, re.DOTALL
-        )
-        if slot1_match:
-            radio["slot1_active"] = slot1_match.group(1).lower() == "yes"
-            radio["slot1_band"] = slot1_match.group(2)
+        blocks = self._split_wlan_slots(output)
+        for slot, block in sorted(blocks.items()):
+            radio["slots"].append(slot)
+            radio[f"slot{slot}_active"] = None
+            radio[f"slot{slot}_band"] = "Unknown"
 
-        slot1_block = re.search(r'slot:\s*slot1(.*?)(?:slot:\s*slot2|$)', output, re.DOTALL | re.IGNORECASE)
-        if slot1_block:
+            active = re.search(r'(?im)^[ \t]*Activate:[ \t]*(\w+)', block)
+            if active:
+                radio[f"slot{slot}_active"] = active.group(1).lower() == "yes"
+
+            # Anchored at the line start so "SSID_profile_N_band:" never matches.
+            band = re.search(r'(?im)^[ \t]*Band:[ \t]*([\dG.]+)', block)
+            if band:
+                radio[f"slot{slot}_band"] = band.group(1)
+
             # [ \t]* (pas \s*) : \s inclut le saut de ligne, ce qui faisait
             # "déborder" la capture sur le libellé du CHAMP SUIVANT quand un
             # profil SSID est vide (ex: "SSID_profile_5:\n SSID_profile_6:"
             # capturait à tort "SSID_profile_6:" comme valeur du profil 5).
             # Bug latent trouvé via les fixtures 7.12 (4 SSIDs + profils vides
             # en fin de liste, jamais exercé par les données de test précédentes).
-            ssids = re.findall(r'SSID_profile_\d+:[ \t]*(\S+)', slot1_block.group(1))
-            radio["slot1_ssids"] = [s for s in ssids if s]
+            ssids = re.findall(r'SSID_profile_\d+:[ \t]*(\S+)', block)
+            radio[f"slot{slot}_ssids"] = [s for s in ssids if s]
 
-        slot2_match = re.search(
-            r'(?i)slot:\s*slot2.*?Activate:\s*(\w+).*?Band:\s*([\dG.]+)', output, re.DOTALL
-        )
-        if slot2_match:
-            radio["slot2_active"] = slot2_match.group(1).lower() == "yes"
-            radio["slot2_band"] = slot2_match.group(2)
+            profile = re.search(r'(?im)^[ \t]*Profile:[ \t]*(\S+)', block)
+            radio[f"slot{slot}_profile"] = profile.group(1) if profile else None
 
-        slot2_block = re.search(r'slot:\s*slot2(.*?)$', output, re.DOTALL | re.IGNORECASE)
-        if slot2_block:
-            ssids = re.findall(r'SSID_profile_\d+:[ \t]*(\S+)', slot2_block.group(1))
-            radio["slot2_ssids"] = [s for s in ssids if s]
+            power = re.search(r'(?im)^[ \t]*SLOT_\d+_Output_power:[ \t]*(\S+)', block)
+            radio[f"slot{slot}_output_power"] = power.group(1) if power else None
 
         return radio
 
     def _parse_radio_slot_active(self, output: str, slot: int) -> Optional[bool]:
         """Extrait uniquement l'état Activate: yes/no d'un slot depuis 'show wlan all'."""
-        match = re.search(rf"(?i)slot:\s*slot{slot}.*?Activate:\s*(\w+)", output, re.DOTALL)
+        block = self._split_wlan_slots(output).get(slot)
+        if block is None:
+            return None
+        match = re.search(r'(?im)^[ \t]*Activate:[ \t]*(\w+)', block)
         return (match.group(1).lower() == "yes") if match else None
 
     def _parse_ssid_schedule_mode(self, output: str) -> Optional[bool]:
@@ -1014,11 +1120,60 @@ class ZyxelSSHAPI:
             return None
         return match.group(1).lower() == "yes"
 
+    # Column layout of 'show port status' when no header line is found
+    # (identical on the NWA50AX 7.12 and the NWA130BE 7.30).
+    _PORT_DEFAULT_COLUMNS = [
+        "Port", "Status", "TxPkts", "RxPkts", "TxBcast", "RxBcast", "Colli.",
+        "TxB/s", "RxB/s", "UpTime", "PVID", "TxBytes", "RxBytes",
+    ]
+    _PORT_NO_LINK = {"down", "n/a", "disable", "disabled"}
+
+    @staticmethod
+    def _to_int(value: Optional[str]) -> Optional[int]:
+        try:
+            return int(value) if value is not None else None
+        except ValueError:
+            return None
+
+    def _parse_port_table(self, output: str) -> list[dict[str, Any]]:
+        """Parse every row of 'show port status', one dict per Ethernet port.
+
+        Columns are located through the header line ("Up Time" counts as one
+        column), so extra or reordered columns on other models do not shift
+        the values. Numeric fields are None when missing, never 0.
+        """
+        columns = list(self._PORT_DEFAULT_COLUMNS)
+        ports: list[dict[str, Any]] = []
+        for line in (output or "").splitlines():
+            if re.match(r'(?i)^\s*Port\s+Status\b', line):
+                columns = re.sub(r'(?i)Up\s+Time', 'UpTime', line).split()
+                continue
+            tokens = line.split()
+            if len(tokens) < 2 or not tokens[0].isdigit():
+                continue
+            row = dict(zip(columns, tokens))
+            status = row.get("Status")
+            ports.append({
+                "port_number": int(tokens[0]),
+                "status": status,
+                "speed": status.split("/")[0] if status and "/" in status else None,
+                "tx_bytes": self._to_int(row.get("TxBytes")),
+                "rx_bytes": self._to_int(row.get("RxBytes")),
+                "tx_rate": self._to_int(row.get("TxB/s")),
+                "rx_rate": self._to_int(row.get("RxB/s")),
+                "uptime": row.get("UpTime"),
+            })
+        return ports
+
     def _parse_port_status(self, output: str) -> dict[str, Any]:
-        """Parse 'show port status' output.
+        """Parse 'show port status' output - the uplink port only.
 
         Les champs numériques (tx_rate/rx_rate/tx_bytes/rx_bytes) sont None si
-        le format n'a pas pu être reconnu, jamais 0."""
+        le format n'a pas pu être reconnu, jamais 0.
+
+        Uplink = the first port with a link; if no port has a link, port 1
+        (single-port NWA50AX: always port 1, as before).
+        """
         port: dict[str, Any] = {
             "status": None,
             "speed": None,
@@ -1029,27 +1184,30 @@ class ZyxelSSHAPI:
             "uptime": None,
         }
 
-        port_match = re.search(
-            r'1\s+(\S+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)\s+(\d+)\s+([\d:]+)\s+\d+\s+(\d+)\s+(\d+)',
-            output
-        )
+        ports = self._parse_port_table(output)
+        if not ports:
+            return port
 
-        if port_match:
-            port["status"] = port_match.group(1)
-            port["tx_rate"] = int(port_match.group(2))
-            port["rx_rate"] = int(port_match.group(3))
-            port["uptime"] = port_match.group(4)
-            port["tx_bytes"] = int(port_match.group(5))
-            port["rx_bytes"] = int(port_match.group(6))
+        linked = [
+            p for p in ports
+            if p["status"] and p["status"].lower() not in self._PORT_NO_LINK
+        ]
+        if linked:
+            selected = linked[0]
+        else:
+            selected = next((p for p in ports if p["port_number"] == 1), ports[0])
 
-            if "/" in port["status"]:
-                port["speed"] = port["status"].split("/")[0]
-
+        port.update(selected)
         return port
 
     # ------------------------------------------------------------------
     # Actions (écriture)
     # ------------------------------------------------------------------
+    # Every write starts with "configure terminal" straight from the login
+    # prompt. The NWA130BE logs in at "Router>" (not "Router#"); whether
+    # "configure terminal" is accepted there without "enable" has NOT been
+    # verified on that model. If it is rejected, nothing changes on the AP
+    # and the read-back verification below reports the action as failed.
 
     async def async_reboot(self) -> bool:
         """Reboot the device."""
@@ -1115,7 +1273,12 @@ class ZyxelSSHAPI:
           puis les vérifications, plutôt qu'une session unique tenue ouverte
           pendant tout le redémarrage matériel (risque de canal SSH idle qui
           tombe pendant que le firmware réinitialise la radio).
+
+        `slot` is the radio module number as shown by 'show wlan all'
+        (1 = 2.4 GHz, 2 = 5 GHz, 3 = 6 GHz on the NWA130BE).
         """
+        if not isinstance(slot, int) or slot < 1:
+            raise ValueError(f"Invalid radio slot: {slot!r}")
         if not enable:
             return await self._toggle_radio_fast_off(slot)
         return await self._toggle_radio_slow_on(slot)
@@ -1226,11 +1389,7 @@ class ZyxelSSHAPI:
                 lambda: self._async_execute_session_direct(["show wlan all"], settle_delays=[CLI_SETTLE_SLOW_READ]),
             )
             if outputs and outputs[0]:
-                radio = self._parse_wlan(outputs[0])
-                self._known_ssids = sorted(
-                    {s for s in radio.get("slot1_ssids", []) if s}
-                    | {s for s in radio.get("slot2_ssids", []) if s}
-                )
+                self._known_ssids = ssids_from_radio(self._parse_wlan(outputs[0]))
         except Exception as err:
             _LOGGER.error("Error getting SSID list: %s", err)
 

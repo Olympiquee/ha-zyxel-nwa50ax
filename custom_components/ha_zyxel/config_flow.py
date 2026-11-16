@@ -18,6 +18,7 @@ from .const import (
     CONF_MIKROTIK_REFRESH_INTERVAL,
     CONF_MIKROTIK_SSH_FINGERPRINT,
     CONF_MIKROTIK_USERNAME,
+    CONF_NAME,
     CONF_PASSWORD,
     CONF_RESET_MIKROTIK_SSH_FINGERPRINT,
     CONF_RESET_SSH_FINGERPRINT,
@@ -51,8 +52,28 @@ DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_HOST, default=DEFAULT_HOST): str,
         vol.Required(CONF_USERNAME, default=DEFAULT_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
+        # Optional: lets several APs of the same model get distinct device
+        # and entity names. Empty -> "Zyxel <detected model>".
+        vol.Optional(CONF_NAME): str,
     }
 )
+
+# Model part of the default name when 'show version' could not be read.
+UNKNOWN_MODEL_NAME = "AP"
+
+
+def default_device_name(model: str | None) -> str:
+    """Default device name for a new entry: "Zyxel <model>"."""
+    if not model or model == "Unknown":
+        model = UNKNOWN_MODEL_NAME
+    return f"Zyxel {model}"
+
+
+def resolve_device_name(user_name: str | None, model: str | None) -> str:
+    """Name typed by the user, or the model-based default if left empty."""
+    name = (user_name or "").strip()
+    return name or default_device_name(model)
+
 
 # Libellés affichés dans le menu déroulant "groupe" - "value" doit rester
 # fast/slow/daily (c'est ce qui est stocké et relu par __init__.py).
@@ -72,12 +93,15 @@ def _group_selector() -> selector.SelectSelector:
     )
 
 
-async def validate_input(hass: HomeAssistant, data: dict) -> dict:
+async def validate_input(hass: HomeAssistant, data: dict, fetch_model: bool = False) -> dict:
     """Validate that the user input allows us to connect.
 
     Note : ce test de connexion utilise sa propre instance API jetable, donc
     sa propre empreinte SSH TOFU (jamais persistée) - il ne pollue jamais
     l'empreinte mémorisée par l'entry réelle créée dans __init__.py.
+
+    With `fetch_model`, also reads the model from 'show version' (one more
+    short SSH session). Returns {"model": <model or None>}.
     """
     host = data[CONF_HOST]
     username = data[CONF_USERNAME]
@@ -97,7 +121,13 @@ async def validate_input(hass: HomeAssistant, data: dict) -> dict:
         _LOGGER.error("Unable to connect to Zyxel device: %s", ex)
         raise CannotConnect from ex
 
-    return {"title": f"Zyxel NWA50AX ({host})"}
+    model = None
+    if fetch_model:
+        version = await api.async_fetch_device_info()
+        if version and version.get("model") not in (None, "", "Unknown"):
+            model = version["model"]
+
+    return {"model": model}
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -111,7 +141,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
-                info = await validate_input(self.hass, user_input)
+                info = await validate_input(self.hass, user_input, fetch_model=True)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -123,7 +153,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not errors:
                 await self.async_set_unique_id(user_input[CONF_HOST])
                 self._abort_if_unique_id_configured()
-                return self.async_create_entry(title=info["title"], data=user_input)
+                name = resolve_device_name(user_input.get(CONF_NAME), info["model"])
+                data = {**user_input, CONF_NAME: name}
+                return self.async_create_entry(title=f"{name} ({user_input[CONF_HOST]})", data=data)
 
         return self.async_show_form(
             step_id="user", data_schema=DATA_SCHEMA, errors=errors
@@ -146,8 +178,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
             if not errors:
+                # Merge, so that keys not on this form (the device name) survive.
                 return self.async_update_reload_and_abort(
-                    reconfigure_entry, data=user_input
+                    reconfigure_entry, data={**reconfigure_entry.data, **user_input}
                 )
 
         current = reconfigure_entry.data

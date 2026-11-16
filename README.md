@@ -1,36 +1,44 @@
-# Zyxel NWA50AX Home Assistant Integration
+# Zyxel NWA50AX / NWA130BE Home Assistant Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
 ![Version](https://img.shields.io/badge/version-2.3.1-blue.svg)
 
-Home Assistant custom integration for a **Zyxel NWA50AX** WiFi access point (standalone mode) over SSH.
+Home Assistant custom integration for **Zyxel NWA** WiFi access points (standalone mode) over SSH: the dual-band **NWA50AX** and the tri-band Wi-Fi 7 **NWA130BE** (2.4 / 5 / 6 GHz).
 
 See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
-## Supported firmware
+## Supported models and firmware
 
-| Firmware | Status |
-|---|---|
-| 7.10(ABYW.3) | Validated (manufacturer CLI reference + real captures) |
-| 7.12(ABYW.0) | Validated (real CLI captures, see `tests/fixtures/v712/`) |
+| Model | Radios | Firmware | Status |
+|---|---|---|---|
+| NWA50AX | 2.4 / 5 GHz | 7.10(ABYW.3) | Validated (manufacturer CLI reference + real captures) |
+| NWA50AX | 2.4 / 5 GHz | 7.12(ABYW.0) | Validated (real CLI captures, see `tests/fixtures/v712/`) |
+| NWA130BE | 2.4 / 5 / 6 GHz | V7.30(ACIL.4) | Read path validated (anonymised real captures, see `tests/fixtures/nwa130be_v730/`). Write actions (radio on/off, SSID schedule, Guest SSID) not yet verified on this model - see below |
 
-No breaking CLI format change was found between these two firmware lines for the commands this integration uses. Real captures are kept as regression-test fixtures so a future firmware update can be checked the same way, without needing physical access to the AP for every code change.
+No breaking CLI format change was found between the two NWA50AX firmware lines for the commands this integration uses. Real captures are kept as regression-test fixtures so a future firmware update can be checked the same way, without needing physical access to the AP for every code change.
+
+Differences handled for the NWA130BE: three radio blocks (`slot1`/`slot2`/`slot3`) in `show wlan all`, a `Router>` prompt after login (the NWA50AX shows `Router#`), two Ethernet ports in `show port status`, 6 GHz and MLO fields in `show wireless-hal station info`.
+
+**NWA130BE write actions:** the AP logs in at `Router>`. Whether `configure terminal` is accepted there without `enable` has not been verified yet. If it is not, the radio and SSID switches do nothing on the AP and report the action as failed (every write is read back and checked). Feedback from an NWA130BE owner is welcome.
+
+### Other models
+To add a model or firmware, capture its CLI output with `tools/capture_cli.sh <ap-host> [user]` (read-only `show` commands; the raw transcript goes to `captures/`, which must not be committed), turn it into anonymised fixtures with `python3 tools/make_fixtures.py captures/<host>.txt tests/fixtures/<model>_v<version>/`, check the result by eye, and add tests for it (see `tests/README.md`).
 
 ## Features
 
 ### Sensors
 - System: Uptime, Firmware/model, Last Seen (reactive to all 3 refresh groups)
 - Performance: CPU (current + 1/5 min avg, any number of cores), Memory usage
-- WiFi clients: total / 2.4GHz / 5GHz counts, with a detailed attribute list (MAC, IP, hostname, SSID, band, RSSI)
-- Ethernet port: status, TX/RX rate, TX/RX total bytes
-- Radio: 2.4GHz / 5GHz status with active SSIDs
+- WiFi clients: total / 2.4GHz / 5GHz counts (plus 6GHz on APs with a 6 GHz radio), with a detailed attribute list (MAC, IP, hostname, SSID, band, RSSI, MLO on Wi-Fi 7)
+- Ethernet port: status, TX/RX rate, TX/RX total bytes (on APs with several ports: the first port with a link, otherwise port 1)
+- Radio: one status sensor per radio module (2.4GHz / 5GHz, plus 6GHz on the NWA130BE) with active SSID profiles
 
 Numeric/boolean sensors report `unknown` (not `0` / `False`) when a value could not be parsed, so a parsing failure is never silently confused with a real zero reading.
 
 ### Switches
-- Guest SSID (always-on vs. follows its configured schedule)
-- One schedule switch per additional SSID, auto-detected from the AP (Home/IoT/etc. - whatever you actually have configured)
-- Radio 2.4GHz / 5GHz on-off
+- Guest SSID (always-on vs. follows its configured schedule) - only created if the AP has an SSID profile named exactly `Guest`
+- One schedule switch per other SSID profile, auto-detected from all radios (Home/IoT/etc. - whatever you actually have configured)
+- Radio on-off per radio module: 2.4GHz / 5GHz, plus 6GHz on the NWA130BE
 
 ### Device tracker
 - One entity per WiFi client ever seen, created dynamically as they connect
@@ -47,7 +55,7 @@ Available from the integration's device page ("Download diagnostics"). Contains 
 
 ## Requirements
 
-- Zyxel NWA50AX access point (standalone mode)
+- Zyxel NWA50AX or NWA130BE access point (standalone mode)
 - SSH access enabled on the AP
 - Home Assistant 2024.1.0 or newer (some options-flow features require a reasonably recent Core version - see Troubleshooting if the options page fails to open)
 - Python package: `paramiko>=2.12.0`
@@ -69,6 +77,7 @@ Available from the integration's device page ("Download diagnostics"). Contains 
 You'll be asked for:
 - **Host**: AP IP address (e.g. `10.0.20.2`)
 - **Username** / **Password**: SSH admin credentials
+- **Name** (optional): device name in Home Assistant, also used as prefix of the entity names. Left empty, it becomes `Zyxel <model>` (model read from the AP, e.g. `Zyxel NWA130BE`). Give each AP its own name (e.g. `Zyxel Living room`) if you have several of the same model. Entries created with earlier versions keep their name `Zyxel NWA50AX`.
 
 The very first successful connection also memorizes the AP's SSH host key fingerprint (see Security below) - nothing to do manually, it happens automatically.
 
@@ -126,7 +135,7 @@ show wlan-ssid-profile <name>      # one per detected SSID
 Actions (radio/SSID toggle send their config command and read back the verification state in the same session; radio *activation* specifically uses separate sessions - see code comments for why):
 ```
 configure terminal
-wlan slot1|slot2
+wlan slot1|slot2|slot3
 [no ]activate
 exit
 exit
@@ -140,7 +149,7 @@ write        # Guest only, to match its historical persistent behavior
 
 ## Testing
 
-`tests/fixtures/` contains real CLI output captured from a physical NWA50AX, used as regression fixtures so a firmware update or a future code change can be checked against known-good output without needing the physical device. See `tests/README.md`.
+`tests/fixtures/` contains real CLI output captured from a physical NWA50AX and (anonymised) NWA130BE, used as regression fixtures so a firmware update or a future code change can be checked against known-good output without needing the physical device. See `tests/README.md`.
 
 ## Troubleshooting
 
