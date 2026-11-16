@@ -6,6 +6,9 @@ DOMAIN = "ha_zyxel"
 CONF_HOST = "host"
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
+# Optional device name chosen in the config flow (default "Zyxel <model>").
+# Absent from entries created before multi-model support.
+CONF_NAME = "name"
 
 # Configuration - Groupes de rafraîchissement
 CONF_FAST_INTERVAL = "fast_interval"

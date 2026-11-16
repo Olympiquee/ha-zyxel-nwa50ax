@@ -3,11 +3,12 @@
     "step": {
       "user": {
         "title": "Configure Zyxel Device",
-        "description": "Configure your Zyxel NWA50AX access point",
+        "description": "Configure your Zyxel NWA access point (e.g. NWA50AX, NWA130BE). Leave the name empty to use the detected model (e.g. \"Zyxel NWA130BE\"); give each AP its own name if you have several of the same model.",
         "data": {
           "host": "IP Address or Hostname",
           "username": "Username",
-          "password": "Password"
+          "password": "Password",
+          "name": "Name (optional)"
         }
       },
       "reconfigure": {
@@ -41,7 +42,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Zyxel NWA50AX Options",
+        "title": "Zyxel AP Options",
         "menu_options": {
           "intervals": "Refresh intervals",
           "data_groups": "Data assignment (fast/slow/daily)",
@@ -62,7 +63,7 @@
         "title": "Data assignment",
         "description": "Choose which refresh group (Fast / Slow / Daily) each family of data belongs to. Defaults match the recommended split; change any of them freely.",
         "data": {
-          "item_group_radio": "Radio state (2.4GHz / 5GHz)",
+          "item_group_radio": "Radio state (all radio bands)",
           "item_group_clients": "Connected WiFi clients",
           "item_group_cpu": "CPU usage",
           "item_group_memory": "Memory usage",

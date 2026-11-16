@@ -1,4 +1,4 @@
-"""Button platform for Zyxel integration - Optimized for NWA50AX V7.10."""
+"""Button platform for the Zyxel integration (NWA50AX, NWA130BE)."""
 import logging
 from typing import Any
 
