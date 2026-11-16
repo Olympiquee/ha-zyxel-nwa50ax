@@ -45,6 +45,8 @@
         "menu_options": {
           "intervals": "Refresh intervals",
           "data_groups": "Data assignment (fast/slow/daily)",
+          "display": "Display (switch names)",
+          "invert": "Invert switches",
           "mikrotik": "MikroTik hostname resolver",
           "security": "Security (SSH fingerprints)"
         }
@@ -71,6 +73,20 @@
           "item_group_port": "Ethernet port",
           "item_group_ssid_schedules": "SSID schedules (incl. Guest)",
           "item_group_device_info": "Model / firmware"
+        }
+      },
+      "display": {
+        "title": "Display",
+        "description": "Choose how the SSID switches are named. When enabled, each switch shows the real WiFi name your devices see (e.g. \"SSID MyHome Schedule\") instead of the internal AP profile name (e.g. \"SSID Home Schedule\"). This applies to every SSID switch, Guest included. The profile name is always available in the switch attributes.",
+        "data": {
+          "use_real_ssid_names": "Use the real SSID in switch names"
+        }
+      },
+      "invert": {
+        "title": "Invert switches",
+        "description": "Choose which SSID switches are reversed. Normal switch: ON = the schedule is active (the SSID follows its planned hours), OFF = SSID always on. Reversed switch: ON = SSID always on (schedule disabled), OFF = the schedule is active. A reversed switch shows \"[reversed]\" in its name. By default only Guest is reversed (its historical behaviour). Unselect everything to have no reversed switch.",
+        "data": {
+          "inverted_ssids": "Reversed switches"
         }
       },
       "mikrotik": {
