@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.5.0 - 2026-11-14
+## 2.5.0 - 2026-11-16
 
 ### Added
 - **Save config (write) button.** Makes the current configuration permanent, with a confirmation step: the first press posts a notification listing what `write` would make permanent (radio, SSID schedules, anything else that differs), the second press within 60 s saves. After the save it waits until the AP answers again and reports how long that took.
@@ -16,7 +16,7 @@
 - Nothing about the existing switches or the schedule/radio toggles changes: they are still temporary (no `write`), except Guest.
 - Tests: fixtures `show_running_config.txt` (anonymized, fake secrets) and `dir_conf.txt`.
 
-## 2.4.0 - 2026-11-14
+## 2.4.0 - 2026-11-16
 
 ### Added
 - **Real SSID in switch names.** New *Display* section in the integration's options ("Use the real SSID in switch names", enabled by default). Every SSID switch, Guest included, is named after the SSID your devices see (`SSID MyHome Schedule`, `SSID MyHome_guest Schedule`) rather than the AP profile name (`SSID Home Schedule`, `Guest SSID`). Unchecking the option restores the previous naming.
