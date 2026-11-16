@@ -11,6 +11,7 @@ from .const import (
     CONF_DAILY_INTERVAL,
     CONF_FAST_INTERVAL,
     CONF_HOST,
+    CONF_INVERTED_SSIDS,
     CONF_ITEM_GROUP_PREFIX,
     CONF_MIKROTIK_ENABLED,
     CONF_MIKROTIK_HOST,
@@ -24,7 +25,9 @@ from .const import (
     CONF_SLOW_INTERVAL,
     CONF_SSH_FINGERPRINT,
     CONF_UPDATE_INTERVAL,
+    CONF_USE_REAL_SSID_NAMES,
     CONF_USERNAME,
+    DATA_ITEM_SSID_SCHEDULES,
     DATA_ITEMS,
     DEFAULT_DAILY_INTERVAL,
     DEFAULT_FAST_INTERVAL,
@@ -32,6 +35,7 @@ from .const import (
     DEFAULT_ITEM_GROUPS,
     DEFAULT_MIKROTIK_REFRESH_INTERVAL,
     DEFAULT_SLOW_INTERVAL,
+    DEFAULT_USE_REAL_SSID_NAMES,
     DEFAULT_USERNAME,
     DOMAIN,
     MAX_DAILY_INTERVAL,
@@ -42,6 +46,7 @@ from .const import (
     MIN_SLOW_INTERVAL,
 )
 from .ssh_security import SSHHostKeyChangedError
+from .ssid_names import inverted_profiles
 from .zyxel_ssh_api import ZyxelAuthError, ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
@@ -198,7 +203,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class OptionsFlow(config_entries.OptionsFlow):
-    """Options Zyxel : menu à 4 sections.
+    """Options Zyxel : menu à 6 sections.
 
     Pas de __init__ personnalisé : `self.config_entry` est désormais fourni
     automatiquement par le framework HA (versions récentes de Home Assistant
@@ -222,7 +227,7 @@ class OptionsFlow(config_entries.OptionsFlow):
         """Menu principal des options."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["intervals", "data_groups", "mikrotik", "security"],
+            menu_options=["intervals", "data_groups", "display", "invert", "mikrotik", "security"],
         )
 
     async def async_step_intervals(self, user_input=None):
@@ -271,6 +276,75 @@ class OptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="data_groups",
             data_schema=vol.Schema(schema_dict),
+        )
+
+    async def async_step_display(self, user_input=None):
+        """Affichage : vrai SSID ou nom de profil dans le nom des switches SSID."""
+        if user_input is not None:
+            return self._save(user_input)
+
+        default = self.config_entry.options.get(
+            CONF_USE_REAL_SSID_NAMES, DEFAULT_USE_REAL_SSID_NAMES
+        )
+        return self.async_show_form(
+            step_id="display",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_USE_REAL_SSID_NAMES, default=default): bool,
+            }),
+        )
+
+    async def _ssid_choices(self, current: list[str]) -> list[dict]:
+        """Profils SSID proposés pour l'inversion, avec le vrai SSID dans le libellé.
+
+        Source : le cache de l'API (aucune commande SSH si déjà peuplé) et les
+        noms lus lors du dernier cycle lent. Les profils déjà enregistrés dans
+        les options restent proposés même si l'AP est momentanément injoignable,
+        pour qu'ils ne disparaissent pas silencieusement de la sélection.
+        """
+        profiles = set(current)
+        names: dict[str, str] = {}
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        if entry_data:
+            try:
+                profiles.update(await entry_data["api"].async_get_ssid_list())
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.debug("Liste des SSID indisponible pour l'écran d'inversion: %s", err)
+            coordinator = entry_data.get("coordinator_for_item", {}).get(DATA_ITEM_SSID_SCHEDULES)
+            names = (getattr(coordinator, "data", None) or {}).get("ssid_names", {})
+
+        options = []
+        for profile in sorted(profiles):
+            real = names.get(profile)
+            label = f"{real} ({profile})" if real and real != profile else profile
+            options.append({"value": profile, "label": label})
+        return options
+
+    async def async_step_invert(self, user_input=None):
+        """Sens de chaque switch SSID : normal (ON = planning actif) ou inversé.
+
+        Un switch inversé : ON = SSID toujours actif (planning désactivé).
+        Défaut : seul Guest est inversé (son comportement historique).
+        """
+        if user_input is not None:
+            # Clé absente ou liste vide = "aucun switch inversé" : choix EXPLICITE
+            # de l'utilisateur, qui ne doit surtout pas retomber sur le défaut.
+            return self._save({CONF_INVERTED_SSIDS: list(user_input.get(CONF_INVERTED_SSIDS) or [])})
+
+        current = sorted(inverted_profiles(self.config_entry.options.get(CONF_INVERTED_SSIDS)))
+        choices = await self._ssid_choices(current)
+        return self.async_show_form(
+            step_id="invert",
+            data_schema=vol.Schema({
+                vol.Optional(
+                    CONF_INVERTED_SSIDS, description={"suggested_value": current}
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=choices,
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.LIST,
+                    )
+                ),
+            }),
         )
 
     async def async_step_mikrotik(self, user_input=None):
