@@ -8,7 +8,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 
-from .const import DOMAIN
+from .config_baseline import ConfigBaseline
+from .const import DATA_ITEM_RADIO, DOMAIN, WRITE_CONFIRM_WINDOW_SECONDS
 from .entity_helpers import build_device_info
 from .zyxel_ssh_api import ZyxelConnectionError, ZyxelSSHAPI
 
@@ -36,6 +37,11 @@ async def async_setup_entry(
         ZyxelGroupRefreshButton(
             entry_data["coordinator_daily"], entry_data["api"], config_entry,
             group="daily", label="Refresh (quotidien)",
+        ),
+        ZyxelWriteConfigButton(
+            entry_data["coordinator_fast"], config_entry,
+            entry_data["config_baseline"],
+            entry_data["coordinator_for_item"][DATA_ITEM_RADIO],
         ),
     ]
 
@@ -126,3 +132,61 @@ class ZyxelGroupRefreshButton(CoordinatorEntity, ButtonEntity):
             _LOGGER.error("Rafraîchissement manuel '%s' échoué: %s", self._group, err)
         except Exception as err:
             _LOGGER.error("Erreur lors du rafraîchissement manuel '%s': %s", self._group, err)
+
+
+class ZyxelWriteConfigButton(CoordinatorEntity, ButtonEntity):
+    """Enregistre la config en cours dans la mémoire de l'AP (`write`), avec confirmation.
+
+    - 1er appui : une notification liste ce que le `write` rendrait permanent
+      (comparaison avec la configuration de référence) ; rien n'est écrit.
+    - 2e appui dans les 60 s : le `write` est réellement envoyé.
+
+    Pourquoi cette précaution : `write` fige TOUTE la configuration en cours,
+    y compris les changements temporaires (radio coupée, planning désactivé),
+    et peut geler l'AP plusieurs dizaines de secondes. Voir config_baseline.py.
+    """
+
+    _attr_name = "Save config (write)"
+    _attr_icon = "mdi:content-save-alert-outline"
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: DataUpdateCoordinator,
+        config_entry: ConfigEntry,
+        config_baseline: ConfigBaseline,
+        radio_coordinator: DataUpdateCoordinator,
+    ) -> None:
+        """Initialize the button."""
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._config_baseline = config_baseline
+        self._radio_coordinator = radio_coordinator
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID."""
+        return f"{self._config_entry.entry_id}_write_config"
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        return build_device_info(self.hass, self._config_entry.entry_id)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "confirm_window_seconds": WRITE_CONFIRM_WINDOW_SECONDS,
+            "confirm_until": self._config_baseline.confirm_until,
+            "reference_captured_at": self._config_baseline.reference_captured_at,
+            "last_write": self._config_baseline.last_result,
+        }
+
+    async def async_press(self) -> None:
+        """1er appui : aperçu + armement. 2e appui (sous 60 s) : écriture."""
+        radio = (self._radio_coordinator.data or {}).get("radio", {})
+        try:
+            outcome = await self._config_baseline.async_press(radio)
+            _LOGGER.info("Bouton Write : %s", outcome)
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.error("Erreur du bouton Write: %s", err)
+        self.async_write_ha_state()
