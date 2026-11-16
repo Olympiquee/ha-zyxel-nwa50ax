@@ -25,6 +25,25 @@ install, if you prefer a lighter test-only dependency).
   contribute - see the module docstring in `zyxel_ssh_api.py` for the list of
   commands used.
 
+- `test_ssid_names.py` - naming and inversion rules of the SSID switches (pure
+  logic, no Home Assistant needed).
+- `test_config_snapshot.py` - reference configuration used by the Save config
+  button: secret masking, block-by-block comparison, report statuses and
+  messages.
+- `test_config_io.py` - the API side of the same feature (reading the
+  configuration, `write`, persistence listener) against a simulated SSH session.
+
+### Two fixtures that are NOT raw captures
+
+`fixtures/v712/show_running_config.txt` keeps the real structure of a capture
+(including the line-order quirks the comparison has to tolerate) but is
+**trimmed and anonymized: every secret in it is a fake value starting with
+`FAKE`**, and the tests assert that no `FAKE` value survives masking.
+`dir_conf.txt` is a real `dir /conf` listing.
+
+> **Never commit a real `show running-config`.** It contains the admin password
+> hash and the encrypted WiFi keys.
+
 ## Adding a new firmware version
 
 1. SSH into the AP and run each command listed in `zyxel_ssh_api.py`'s module
