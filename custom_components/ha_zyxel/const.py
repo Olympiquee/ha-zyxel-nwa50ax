@@ -35,9 +35,22 @@ CONF_MIKROTIK_SSH_FINGERPRINT = "mikrotik_ssh_fingerprint"
 CONF_RESET_SSH_FINGERPRINT = "reset_ssh_fingerprint"
 CONF_RESET_MIKROTIK_SSH_FINGERPRINT = "reset_mikrotik_ssh_fingerprint"
 
+# Configuration - Affichage
+# Utiliser le vrai SSID diffusé (ex. "MyHome") plutôt que le nom du profil AP
+# (ex. "Home") dans le nom des switches SSID. Coché par défaut.
+CONF_USE_REAL_SSID_NAMES = "use_real_ssid_names"
+
+# Configuration - Inversion des switches SSID
+# Liste des profils SSID dont le switch est "inversé" (ON = SSID toujours actif
+# au lieu de ON = planning actif). Clé absente = défaut ("Guest" inversé).
+CONF_INVERTED_SSIDS = "inverted_ssids"
+
 # Defaults - Connexion
 DEFAULT_HOST = "192.168.1.2"
 DEFAULT_USERNAME = "admin"
+
+# Defaults - Affichage
+DEFAULT_USE_REAL_SSID_NAMES = True
 
 # Defaults - Groupes de rafraîchissement
 DEFAULT_FAST_INTERVAL = 120        # 2 minutes - radios + clients connectés
@@ -61,6 +74,8 @@ MIKROTIK_HOSTNAME_CACHE_TTL = 900        # 15 minutes - durée de vie d'une entr
 # Plus la valeur est basse, plus l'opération est traitée en premier.
 # Un seul worker dépile cette file : deux opérations ne peuvent jamais
 # s'exécuter en même temps, quel que soit le nombre de coordinators.
+PRIORITY_BASELINE = -1  # Reprise de la config de référence juste après un write : doit passer AVANT tout
+                        # autre changement en attente, sinon la référence capturerait un état déjà modifié
 PRIORITY_WRITE = 0    # Changements de config (radio, schedule SSID, reboot)
 PRIORITY_MANUAL = 1   # Rafraîchissement manuel demandé via un bouton
 PRIORITY_FAST = 2     # Cycle automatique du groupe rapide
@@ -144,6 +159,11 @@ CLI_READ_IDLE_ROUNDS = 3        # Nb d'intervalles sans données avant d'arrête
 CLI_READ_IDLE_PAUSE = 0.3       # Durée d'un intervalle d'attente pendant la lecture
 CLI_READ_MAX_WAIT = 8.0         # Plafond dur de lecture par commande (secondes)
 CLI_CLOSE_DELAY = 0.5           # Délai avant fermeture de session après 'exit'
+
+# Bouton "Write" (enregistrement de la configuration en cours dans la flash de l'AP)
+WRITE_CONFIRM_WINDOW_SECONDS = 60    # Délai pour confirmer par un 2e appui
+WRITE_RECOVERY_MAX_SECONDS = 120     # Attente max que l'AP réponde de nouveau après un write
+WRITE_RECOVERY_POLL_SECONDS = 5      # Intervalle entre deux tests de réponse de l'AP
 
 # Attributes (device_info)
 ATTR_DEVICE_MODEL = "device_model"
