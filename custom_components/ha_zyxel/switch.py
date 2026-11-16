@@ -9,8 +9,23 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 
-from .const import DATA_ITEM_RADIO, DATA_ITEM_SSID_SCHEDULES, DOMAIN
+from .const import (
+    CONF_INVERTED_SSIDS,
+    CONF_USE_REAL_SSID_NAMES,
+    DATA_ITEM_RADIO,
+    DATA_ITEM_SSID_SCHEDULES,
+    DEFAULT_USE_REAL_SSID_NAMES,
+    DOMAIN,
+)
 from .entity_helpers import build_device_info
+from .ssid_names import (
+    effective_state,
+    guest_switch_label,
+    inverted_profiles,
+    schedule_switch_label,
+    schedule_wanted,
+    semantic_note,
+)
 from .zyxel_ssh_api import ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,15 +46,42 @@ class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
         api: ZyxelSSHAPI,
         config_entry: ConfigEntry,
         ssid_name: str,
+        use_real_names: bool = DEFAULT_USE_REAL_SSID_NAMES,
+        inverted: bool = False,
     ) -> None:
-        """Initialize the SSID schedule switch."""
+        """Initialize the SSID schedule switch.
+
+        `ssid_name` est le nom du PROFIL côté AP (ex. "Home") : c'est lui qui
+        sert dans les commandes CLI et dans l'identifiant unique (qui ne change
+        donc jamais). Seul le nom AFFICHÉ peut montrer le vrai SSID diffusé.
+        """
         super().__init__(coordinator)
         self._api = api
         self._config_entry = config_entry
         self._ssid_name = ssid_name
+        self._use_real_names = use_real_names
+        self._inverted = inverted
+        self._names_cache: dict[str, str] = {}
         self._attr_unique_id = f"zyxel_{config_entry.entry_id}_ssid_schedule_{ssid_name.lower()}"
-        self._attr_name = f"SSID {ssid_name} Schedule"
         self._attr_icon = "mdi:calendar-clock"
+
+    def _known_names(self) -> dict[str, str]:
+        """Profil -> SSID diffusé, avec mémoire de la dernière valeur connue.
+
+        Si un cycle lent rate la lecture d'un profil, on garde le dernier nom
+        connu plutôt que de faire "clignoter" le nom du switch entre vrai SSID
+        et nom de profil.
+        """
+        current = (self.coordinator.data or {}).get("ssid_names")
+        if current:
+            self._names_cache.update(current)
+        return self._names_cache
+
+    @property
+    def name(self) -> str:
+        return schedule_switch_label(
+            self._ssid_name, self._known_names(), self._use_real_names, self._inverted
+        )
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -47,37 +89,48 @@ class ZyxelSSIDScheduleSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Return true if SSID schedule is enabled. None si pas encore connu."""
-        return self.coordinator.data.get("ssid_schedules", {}).get(self._ssid_name)
+        """État affiché : planning actif (normal) ou SSID toujours actif (inversé).
+
+        None si l'état du planning n'est pas encore connu.
+        """
+        schedule = self.coordinator.data.get("ssid_schedules", {}).get(self._ssid_name)
+        return effective_state(schedule, self._inverted)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional attributes."""
-        return {
+        attrs = {
             "ssid_name": self._ssid_name,
             "description": f"Contrôle le schedule du SSID {self._ssid_name}",
-            "note": "ON = Schedule actif (auto on/off), OFF = Always-on (24/7)",
+            "note": semantic_note(self._inverted),
+            "reversed": self._inverted,
         }
+        broadcast = self._known_names().get(self._ssid_name)
+        if broadcast:
+            attrs["broadcast_ssid"] = broadcast
+        return attrs
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Enable SSID schedule (auto on/off)."""
-        _LOGGER.info("Enabling schedule for SSID %s", self._ssid_name)
-        success = await self._api.async_toggle_ssid_schedule(self._ssid_name, enable=True)
-        if success:
-            self._push_confirmed_state(True)
-            _LOGGER.info("SSID %s schedule enabled successfully", self._ssid_name)
-        else:
-            _LOGGER.error("Failed to enable schedule for SSID %s", self._ssid_name)
+        """Switch sur ON : planning actif (normal) ou SSID toujours actif (inversé)."""
+        await self._apply(switch_on=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Disable SSID schedule (always-on)."""
-        _LOGGER.info("Disabling schedule for SSID %s (always-on)", self._ssid_name)
-        success = await self._api.async_toggle_ssid_schedule(self._ssid_name, enable=False)
+        """Switch sur OFF : SSID toujours actif (normal) ou planning actif (inversé)."""
+        await self._apply(switch_on=False)
+
+    async def _apply(self, switch_on: bool) -> None:
+        # Ce qu'il faut réellement faire sur l'AP dépend du sens du switch.
+        enable = schedule_wanted(switch_on, self._inverted)
+        _LOGGER.info(
+            "SSID %s : switch %s (inversé=%s) -> planning %s",
+            self._ssid_name, "ON" if switch_on else "OFF", self._inverted,
+            "actif" if enable else "désactivé (always-on)",
+        )
+        success = await self._api.async_toggle_ssid_schedule(self._ssid_name, enable=enable)
         if success:
-            self._push_confirmed_state(False)
-            _LOGGER.info("SSID %s schedule disabled successfully (always-on)", self._ssid_name)
+            self._push_confirmed_state(enable)
         else:
-            _LOGGER.error("Failed to disable schedule for SSID %s", self._ssid_name)
+            _LOGGER.error("Failed to change schedule for SSID %s", self._ssid_name)
 
     def _push_confirmed_state(self, state: bool) -> None:
         """Injecte l'état confirmé dans le coordinator lent, sans attendre son cycle.
@@ -100,15 +153,41 @@ class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
     toujours actif = schedule DÉSACTIVÉ (enable=False côté API).
     """
 
-    _attr_name = "Guest SSID"
     _attr_icon = "mdi:wifi"
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, api, config_entry: ConfigEntry) -> None:
-        """Initialize the switch."""
+    def __init__(
+        self,
+        coordinator,
+        api,
+        config_entry: ConfigEntry,
+        use_real_names: bool = DEFAULT_USE_REAL_SSID_NAMES,
+        inverted: bool = True,
+    ) -> None:
+        """Initialize the switch.
+
+        `inverted=True` par défaut : c'est le comportement historique du
+        switch Guest (ON = SSID toujours actif).
+        """
         super().__init__(coordinator)
         self._api = api
         self._config_entry = config_entry
+        self._use_real_names = use_real_names
+        self._inverted = inverted
+        self._names_cache: dict[str, str] = {}
+
+    def _known_names(self) -> dict[str, str]:
+        """Profil -> SSID diffusé (dernière valeur connue conservée)."""
+        current = (self.coordinator.data or {}).get("ssid_names")
+        if current:
+            self._names_cache.update(current)
+        return self._names_cache
+
+    @property
+    def name(self) -> str:
+        return guest_switch_label(
+            "Guest", self._known_names(), self._use_real_names, self._inverted
+        )
 
     @property
     def unique_id(self) -> str:
@@ -121,37 +200,36 @@ class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Return true if Guest SSID is enabled (schedule désactivé)."""
-        schedule_enabled = self.coordinator.data.get("ssid_schedules", {}).get("Guest")
-        if schedule_enabled is None:
-            return None
-        return not schedule_enabled
+        """État affiché : SSID toujours actif (inversé, défaut) ou planning actif.
+
+        None si l'état du planning n'est pas encore connu.
+        """
+        schedule = self.coordinator.data.get("ssid_schedules", {}).get("Guest")
+        return effective_state(schedule, self._inverted)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the Guest SSID on (disable schedule = always active)."""
-        _LOGGER.info("Enabling Guest SSID (disabling schedule)")
-        try:
-            success = await self._api.async_toggle_ssid_schedule("Guest", enable=False, persist=True)
-            if success:
-                self._push_confirmed_state(schedule_enabled=False)
-                _LOGGER.info("Guest SSID enabled successfully")
-            else:
-                _LOGGER.error("Failed to enable Guest SSID")
-        except Exception as err:
-            _LOGGER.error("Error enabling Guest SSID: %s", err)
+        """Switch sur ON : SSID toujours actif (inversé, défaut) ou planning actif."""
+        await self._apply(switch_on=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the Guest SSID off (enable schedule = follow configured hours)."""
-        _LOGGER.info("Disabling Guest SSID (enabling schedule)")
+        """Switch sur OFF : planning actif (inversé, défaut) ou SSID toujours actif."""
+        await self._apply(switch_on=False)
+
+    async def _apply(self, switch_on: bool) -> None:
+        enable = schedule_wanted(switch_on, self._inverted)
+        _LOGGER.info(
+            "Guest SSID : switch %s (inversé=%s) -> planning %s",
+            "ON" if switch_on else "OFF", self._inverted,
+            "actif" if enable else "désactivé (always-on)",
+        )
         try:
-            success = await self._api.async_toggle_ssid_schedule("Guest", enable=True, persist=True)
+            success = await self._api.async_toggle_ssid_schedule("Guest", enable=enable, persist=True)
             if success:
-                self._push_confirmed_state(schedule_enabled=True)
-                _LOGGER.info("Guest SSID disabled successfully (following schedule)")
+                self._push_confirmed_state(schedule_enabled=enable)
             else:
-                _LOGGER.error("Failed to disable Guest SSID")
+                _LOGGER.error("Failed to change Guest SSID schedule")
         except Exception as err:
-            _LOGGER.error("Error disabling Guest SSID: %s", err)
+            _LOGGER.error("Error changing Guest SSID schedule: %s", err)
 
     def _push_confirmed_state(self, schedule_enabled: bool) -> None:
         self.coordinator.data.setdefault("ssid_schedules", {})["Guest"] = schedule_enabled
@@ -160,10 +238,15 @@ class ZyxelGuestSSIDSwitch(CoordinatorEntity, SwitchEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional attributes."""
-        return {
-            "description": "ON = SSID toujours actif | OFF = Suit le planning configuré",
-            "schedule_info": "Quand OFF, le SSID Guest suit le planning défini dans l'interface web",
+        attrs = {
+            "description": semantic_note(self._inverted),
+            "schedule_info": "Le planning suivi est celui défini dans l'interface web de l'AP",
+            "reversed": self._inverted,
         }
+        broadcast = self._known_names().get("Guest")
+        if broadcast:
+            attrs["broadcast_ssid"] = broadcast
+        return attrs
 
 
 class ZyxelRadio24GSwitch(CoordinatorEntity, SwitchEntity):
@@ -340,9 +423,12 @@ async def async_setup_entry(
     ssid_coordinator = by_item[DATA_ITEM_SSID_SCHEDULES]
     api = entry_data["api"]
     radio_lock = entry_data["radio_lock"]
+    use_real_names = entry.options.get(CONF_USE_REAL_SSID_NAMES, DEFAULT_USE_REAL_SSID_NAMES)
+    # Clé absente = jamais configuré -> défaut (seul Guest inversé, comme avant).
+    inverted = inverted_profiles(entry.options.get(CONF_INVERTED_SSIDS))
 
     entities = [
-        ZyxelGuestSSIDSwitch(ssid_coordinator, api, entry),
+        ZyxelGuestSSIDSwitch(ssid_coordinator, api, entry, use_real_names, "Guest" in inverted),
         ZyxelRadio24GSwitch(radio_coordinator, api, entry, radio_lock),
         ZyxelRadio5GSwitch(radio_coordinator, api, entry, radio_lock),
     ]
@@ -357,7 +443,11 @@ async def async_setup_entry(
         for ssid_name in ssid_list:
             if ssid_name.lower() == "guest":
                 continue  # déjà géré par ZyxelGuestSSIDSwitch
-            entities.append(ZyxelSSIDScheduleSwitch(ssid_coordinator, api, entry, ssid_name))
+            entities.append(
+                ZyxelSSIDScheduleSwitch(
+                    ssid_coordinator, api, entry, ssid_name, use_real_names, ssid_name in inverted
+                )
+            )
 
     except Exception as err:
         _LOGGER.error("Failed to auto-detect SSIDs, skipping schedule switches: %s", err)
