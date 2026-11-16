@@ -37,6 +37,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from .config_snapshot import is_complete, normalize, parse_dir_conf
 from .const import (
     PRIORITY_ADHOC,
     PRIORITY_FAST,
@@ -44,6 +45,8 @@ from .const import (
     PRIORITY_SLOW,
     PRIORITY_DAILY,
     PRIORITY_WRITE,
+    WRITE_RECOVERY_MAX_SECONDS,
+    WRITE_RECOVERY_POLL_SECONDS,
     BACKOFF_BASE_SECONDS,
     BACKOFF_MAX_SECONDS,
     CLI_CLOSE_DELAY,
@@ -144,6 +147,10 @@ class ZyxelSSHAPI:
         # Cache des SSIDs connus, alimenté par l'item "radio" (show wlan all),
         # quel que soit le groupe auquel cet item est actuellement affecté.
         self._known_ssids: list[str] = []
+
+        # Écouteurs prévenus quand un `write` réussi vient de rendre la config en
+        # cours identique à la config enregistrée (voir config_baseline.py).
+        self._persist_listeners: list[Callable[[], None]] = []
 
         # Répartition des données entre groupes fast/slow/daily - modifiable
         # depuis les options HA via set_item_groups(). Par défaut : le tri
@@ -737,10 +744,17 @@ class ZyxelSSHAPI:
 
         def _apply_ssid_schedules(data: dict, outputs: list[str]) -> None:
             schedules = {}
+            # profil AP -> SSID réellement diffusé (lu dans la MÊME sortie que
+            # le schedule : aucune commande SSH supplémentaire)
+            names = {}
             for name, output in zip(self._known_ssids, outputs):
                 if output:
                     schedules[name] = self._parse_ssid_schedule_mode(output)
+                    broadcast = self._parse_ssid_broadcast_name(output)
+                    if broadcast:
+                        names[name] = broadcast
             data["ssid_schedules"] = schedules
+            data["ssid_names"] = names
 
         def _apply_device_info(data: dict, outputs: list[str]) -> None:
             if outputs and outputs[0]:
@@ -1014,6 +1028,16 @@ class ZyxelSSHAPI:
             return None
         return match.group(1).lower() == "yes"
 
+    def _parse_ssid_broadcast_name(self, output: str) -> Optional[str]:
+        """Extrait le SSID réellement diffusé depuis 'show wlan-ssid-profile <name>'.
+
+        La ligne ressemble à `  SSID: MyHome`. L'ancrage en début de ligne
+        évite les faux positifs sur `SSID_schedule_mode:`, `SSID_VLAN_id:` ou
+        `Guest_ssid:`. Retourne None si la ligne est absente ou vide.
+        """
+        match = re.search(r'(?im)^[ \t]*SSID:[ \t]*(\S.*?)[ \t]*$', output)
+        return match.group(1) if match else None
+
     def _parse_port_status(self, output: str) -> dict[str, Any]:
         """Parse 'show port status' output.
 
@@ -1104,6 +1128,113 @@ class ZyxelSSHAPI:
         except Exception as err:
             _LOGGER.debug("AP not responsive: %s", err)
             return False
+
+    # ------------------------------------------------------------------
+    # Configuration de référence / enregistrement (write)
+    # ------------------------------------------------------------------
+
+    def add_persist_listener(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Enregistre un écouteur appelé après un `write` réussi (switch Guest).
+
+        Retourne la fonction qui le retire. L'écouteur est synchrone et ne doit
+        pas bloquer : il programme son travail (ex. tâche de fond).
+        """
+        self._persist_listeners.append(callback)
+
+        def _remove() -> None:
+            if callback in self._persist_listeners:
+                self._persist_listeners.remove(callback)
+
+        return _remove
+
+    def _notify_persisted(self) -> None:
+        for callback in list(self._persist_listeners):
+            try:
+                callback()
+            except Exception as err:  # un écouteur défaillant ne doit jamais faire échouer le toggle
+                _LOGGER.warning("Écouteur de persistance en erreur: %s", err)
+
+    async def async_read_config_state(self, priority: int = PRIORITY_MANUAL) -> Optional[dict[str, Any]]:
+        """Lit la config en cours (`show running-config`) et la date du fichier enregistré.
+
+        Retourne {"lines": [...masquées...], "startup": {"size", "mtime"} | None},
+        ou None si la session échoue OU si la sortie est illisible/incomplète :
+        on ne renvoie jamais de données partielles, une config tronquée
+        produirait un faux diff.
+
+        Les secrets (hash admin, clés WiFi) sont masqués dès la normalisation :
+        la sortie brute n'est ni conservée ni journalisée.
+        """
+        for attempt, settle in enumerate((CLI_SETTLE_SLOW_READ, CLI_SETTLE_SLOW_READ * 2), start=1):
+            outputs = await self._queue_ssh_operation(
+                priority,
+                f"config:read:attempt{attempt}",
+                lambda s=settle: self._async_execute_session_direct(
+                    ["show running-config", "dir /conf"],
+                    settle_delays=[s, CLI_SETTLE_DEFAULT],
+                ),
+            )
+            if outputs is None:
+                return None  # session impossible : inutile de réessayer tout de suite
+
+            lines = normalize(outputs[0] or "")
+            if is_complete(lines):
+                return {"lines": lines, "startup": parse_dir_conf(outputs[1] or "")}
+            _LOGGER.warning(
+                "running-config incomplète (%d lignes, tentative %d/2)%s",
+                len(lines), attempt, " - nouvel essai avec un délai plus long" if attempt == 1 else "",
+            )
+        return None
+
+    async def async_write_config(self) -> dict[str, Any]:
+        """Enregistre la config en cours dans la flash de l'AP (`write`).
+
+        Le `write` peut geler l'AP un certain temps : on attend qu'elle réponde
+        de nouveau AVANT de rendre la main, pour que les cycles suivants ne
+        tombent pas sur un AP muet. La durée mesurée est conservée dans le
+        résultat (et le journal) afin d'ajuster les délais d'après la réalité.
+
+        Retourne {"success", "responsive", "seconds", "reason"} :
+        - success=False, reason="session"  : session SSH impossible
+        - success=False, reason="rejected" : l'AP a refusé la commande
+        - success=True, responsive=False   : write envoyé, AP pas revenue à temps
+        """
+        started = time.monotonic()
+        outputs = await self._queue_ssh_operation(
+            PRIORITY_WRITE,
+            "action:write_config",
+            lambda: self._async_execute_session_direct(
+                ["configure terminal", "write", "exit"],
+                settle_delays=[CLI_SETTLE_CONFIG, CLI_SETTLE_WRITE, CLI_SETTLE_CONFIG],
+            ),
+        )
+        if outputs is None:
+            return {"success": False, "responsive": False, "seconds": None, "reason": "session"}
+
+        answer = (outputs[1] or "").lower()
+        if "command not found" in answer or "parse error" in answer:
+            _LOGGER.error("L'AP a refusé la commande 'write'")
+            return {"success": False, "responsive": False, "seconds": None, "reason": "rejected"}
+
+        responsive = False
+        while True:
+            if await self._is_ap_responsive():
+                responsive = True
+                break
+            if time.monotonic() - started >= WRITE_RECOVERY_MAX_SECONDS:
+                break
+            await asyncio.sleep(WRITE_RECOVERY_POLL_SECONDS)
+
+        seconds = round(time.monotonic() - started, 1)
+        if responsive:
+            _LOGGER.info(
+                "write terminé : l'AP répond de nouveau %.1fs après l'envoi de la commande "
+                "(ce délai inclut quelques secondes d'attente incompressibles de la session)",
+                seconds,
+            )
+        else:
+            _LOGGER.warning("write envoyé mais l'AP ne répond toujours pas après %.1fs", seconds)
+        return {"success": True, "responsive": responsive, "seconds": seconds, "reason": None}
 
     async def async_toggle_radio(self, slot: int, enable: bool) -> bool:
         """Active ou désactive une radio.
@@ -1303,6 +1434,8 @@ class ZyxelSSHAPI:
 
             if current_state == enable:
                 _LOGGER.info("SSID '%s': schedule %s avec succès", ssid_name, action)
+                if persist:
+                    self._notify_persisted()
                 return True
 
             _LOGGER.warning(
