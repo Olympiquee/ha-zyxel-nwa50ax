@@ -1,11 +1,16 @@
 {
   "domain": "ha_zyxel",
   "name": "Zyxel NWA50AX (SSH)",
-  "codeowners": ["@custom"],
+  "codeowners": [
+    "@Olympiquee"
+  ],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/custom/ha-zyxel-ssh",
+  "documentation": "https://github.com/Olympiquee/ha-zyxel-nwa50ax",
   "iot_class": "local_polling",
-  "requirements": [    "paramiko>=2.12.0"],
-  "version": "2.3.1"
+  "issue_tracker": "https://github.com/Olympiquee/ha-zyxel-nwa50ax/issues",
+  "requirements": [
+    "paramiko>=2.12.0"
+  ],
+  "version": "2.5.0"
 }
