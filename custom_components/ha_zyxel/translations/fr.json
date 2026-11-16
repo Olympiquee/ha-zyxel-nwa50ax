@@ -45,6 +45,8 @@
         "menu_options": {
           "intervals": "Intervalles de rafraîchissement",
           "data_groups": "Répartition des données (rapide/lent/quotidien)",
+          "display": "Affichage (noms des switches)",
+          "invert": "Inverser des switches",
           "mikrotik": "Résolveur de noms MikroTik",
           "security": "Sécurité (empreintes SSH)"
         }
@@ -71,6 +73,20 @@
           "item_group_port": "Port Ethernet",
           "item_group_ssid_schedules": "Schedules SSID (dont Guest)",
           "item_group_device_info": "Modèle / firmware"
+        }
+      },
+      "display": {
+        "title": "Affichage",
+        "description": "Choisis comment sont nommés les switches SSID. Activé, chaque switch affiche le vrai nom WiFi vu par tes appareils (ex. \"SSID MyHome Schedule\") au lieu du nom de profil interne de l'AP (ex. \"SSID Home Schedule\"). Cela s'applique à tous les switches SSID, Guest compris. Le nom du profil reste toujours disponible dans les attributs du switch.",
+        "data": {
+          "use_real_ssid_names": "Utiliser le vrai SSID dans le nom des switches"
+        }
+      },
+      "invert": {
+        "title": "Inverser des switches",
+        "description": "Choisis quels switches SSID sont inversés. Switch normal : ON = le planning est actif (le SSID suit ses horaires), OFF = SSID toujours actif. Switch inversé : ON = SSID toujours actif (planning désactivé), OFF = le planning est actif. Un switch inversé affiche \"[reversed]\" dans son nom. Par défaut, seul Guest est inversé (son comportement historique). Décoche tout pour n'avoir aucun switch inversé.",
+        "data": {
+          "inverted_ssids": "Switches inversés"
         }
       },
       "mikrotik": {
