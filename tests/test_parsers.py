@@ -152,3 +152,68 @@ def test_regex_tolerant_to_case_and_spacing(api):
     # regex sont désormais tolérantes par précaution face à un futur firmware.
     assert api._parse_memory("Memory Usage:53 %") == 53
     assert api._parse_memory("MEMORY   USAGE : 53%") == 53
+
+
+# ---------------------------------------------------------------------------
+# SSID réellement diffusé (champ "SSID:" de `show wlan-ssid-profile <profil>`)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "fixture, expected",
+    [
+        ("show_wlan_ssid_profile_home.txt", "MyHome"),
+        ("show_wlan_ssid_profile_guest.txt", "MyHome_guest"),
+        ("show_wlan_ssid_profile_iot.txt", "MyHome_IoT"),
+        ("show_wlan_ssid_profile_studio.txt", "MyHome_Studio"),
+    ],
+)
+def test_v712_ssid_broadcast_name_from_real_captures(api, fixture, expected):
+    assert api._parse_ssid_broadcast_name(load("v712", fixture)) == expected
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "",
+        "ssid profile: Home\n  SSID:\n  SSID_schedule_mode: yes\n",     # champ vide
+        "  SSID:    \n",                                                # espaces seuls
+        "  SSID_schedule_mode: yes\n  Guest_ssid: no\n  SSID_VLAN_id: 20\n",  # faux amis
+    ],
+)
+def test_ssid_broadcast_name_absent_or_empty_is_none(api, output):
+    # Ne doit JAMAIS confondre SSID_schedule_mode / SSID_VLAN_id / Guest_ssid
+    # avec le champ "SSID:" - sinon un switch pourrait s'appeler "yes" ou "20".
+    assert api._parse_ssid_broadcast_name(output) is None
+
+
+def test_ssid_broadcast_name_keeps_internal_spaces_and_strips_edges(api):
+    assert api._parse_ssid_broadcast_name("  SSID:  My Home WiFi  \n") == "My Home WiFi"
+
+
+def test_v712_ssid_schedules_item_fills_states_and_real_names(api):
+    # Exerce l'item "ssid_schedules" de bout en bout (même chemin que le cycle
+    # lent) : états ET noms réels sortent de la MÊME liste de sorties.
+    profiles = ["Home", "Guest", "IoT", "Studio"]
+    api._known_ssids = profiles
+    outputs = [load("v712", f"show_wlan_ssid_profile_{p.lower()}.txt") for p in profiles]
+
+    data = {}
+    api._item_registry["ssid_schedules"].apply(data, outputs)
+
+    assert data["ssid_schedules"] == {"Home": True, "Guest": True, "IoT": False, "Studio": False}
+    assert data["ssid_names"] == {
+        "Home": "MyHome", "Guest": "MyHome_guest", "IoT": "MyHome_IoT", "Studio": "MyHome_Studio",
+    }
+
+
+def test_ssid_schedules_item_skips_name_when_one_read_failed(api):
+    # Une lecture vide (AP qui n'a pas répondu) ne doit ni planter, ni inventer
+    # un nom : le profil retombe simplement sur son nom interne côté switch.
+    api._known_ssids = ["Home", "IoT"]
+    outputs = [load("v712", "show_wlan_ssid_profile_home.txt"), ""]
+
+    data = {}
+    api._item_registry["ssid_schedules"].apply(data, outputs)
+
+    assert data["ssid_schedules"] == {"Home": True}
+    assert data["ssid_names"] == {"Home": "MyHome"}
