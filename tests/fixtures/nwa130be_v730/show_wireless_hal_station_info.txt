@@ -1,0 +1,374 @@
+index: 0
+  MAC: 02:00:00:00:00:01
+  IPv4: 0.0.0.0
+  Slot: 2
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 0M
+  RxRate: 72M
+  RSSI: 96
+  RSSI dBm: -52
+  Time: 07:56:15 2026/11/16
+  VapIdx: 1
+  Capability: 802.11a/b/g/n
+  DOT11 features: 11k/v
+  Display SSID: Home
+  Band: 5GHz
+  MLO: No
+index: 1
+  MAC: 02:00:00:00:00:02
+  IPv4: 10.0.20.2
+  Slot: 1
+  SSID: Home
+  Security: WPA2-PSK
+  TxRate: 57M
+  RxRate: 72M
+  RSSI: 94
+  RSSI dBm: -53
+  Time: 07:39:43 2026/11/16
+  VapIdx: 1
+  Capability: 802.11a/b/g/n
+  DOT11 features: 11k/v
+  Display SSID: Home
+  Band: 2.4GHz
+  MLO: No
+index: 2
+  MAC: 02:00:00:00:00:03
+  IPv4: 10.0.20.3
+  Slot: 3
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 4563M
+  RxRate: 3843M
+  RSSI: 100
+  RSSI dBm: -43
+  Time: 07:29:50 2026/11/16
+  VapIdx: 1
+  Capability: 802.11be
+  DOT11 features: 11k/v
+  Display SSID: Home
+  Band: 6GHz
+  MLO: Yes
+index: 3
+  MAC: 02:00:00:00:00:04
+  IPv4: 10.0.20.4
+  Slot: 1
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 19M
+  RxRate: 6M
+  RSSI: 48
+  RSSI dBm: -76
+  Time: 03:45:09 2026/11/16
+  VapIdx: 1
+  Capability: 802.11b/g/n
+  DOT11 features: N/A
+  Display SSID: Home
+  Band: 2.4GHz
+  MLO: No
+index: 4
+  MAC: 02:00:00:00:00:05
+  IPv4: 10.0.20.5
+  Slot: 1
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 65M
+  RxRate: 6M
+  RSSI: 86
+  RSSI dBm: -57
+  Time: 03:45:08 2026/11/16
+  VapIdx: 1
+  Capability: 802.11b/g/n
+  DOT11 features: N/A
+  Display SSID: Home
+  Band: 2.4GHz
+  MLO: No
+index: 5
+  MAC: 02:00:00:00:00:06
+  IPv4: 10.0.20.6
+  Slot: 1
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 7M
+  RxRate: 65M
+  RSSI: 70
+  RSSI dBm: -65
+  Time: 03:30:28 2026/11/16
+  VapIdx: 1
+  Capability: 802.11b/g/n
+  DOT11 features: N/A
+  Display SSID: Home
+  Band: 2.4GHz
+  MLO: No
+index: 6
+  MAC: 02:00:00:00:00:07
+  IPv4: 10.0.20.7
+  Slot: 1
+  SSID: Home
+  Security: WPA2-PSK
+  TxRate: 18M
+  RxRate: 48M
+  RSSI: 74
+  RSSI dBm: -63
+  Time: 03:30:08 2026/11/16
+  VapIdx: 1
+  Capability: 802.11b/g
+  DOT11 features: N/A
+  Display SSID: Home
+  Band: 2.4GHz
+  MLO: No
+index: 7
+  MAC: 02:00:00:00:00:08
+  IPv4: 10.0.20.8
+  Slot: 1
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 26M
+  RxRate: 28M
+  RSSI: 76
+  RSSI dBm: -62
+  Time: 03:17:19 2026/11/16
+  VapIdx: 1
+  Capability: 802.11b/g/n
+  DOT11 features: N/A
+  Display SSID: Home
+  Band: 2.4GHz
+  MLO: No
+index: 8
+  MAC: 02:00:00:00:00:09
+  IPv4: 10.0.20.9
+  Slot: 1
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 7M
+  RxRate: 6M
+  RSSI: 42
+  RSSI dBm: -79
+  Time: 03:02:33 2026/11/16
+  VapIdx: 1
+  Capability: 802.11b/g/n
+  DOT11 features: N/A
+  Display SSID: Home
+  Band: 2.4GHz
+  MLO: No
+index: 9
+  MAC: 02:00:00:00:00:0a
+  IPv4: 10.0.20.10
+  Slot: 1
+  SSID: Home
+  Security: WPA2-PSK
+  TxRate: 26M
+  RxRate: 72M
+  RSSI: 74
+  RSSI dBm: -63
+  Time: 03:02:33 2026/11/16
+  VapIdx: 1
+  Capability: 802.11a/b/g/n
+  DOT11 features: 11k/v
+  Display SSID: Home
+  Band: 2.4GHz
+  MLO: No
+index: 10
+  MAC: 02:00:00:00:00:0b
+  IPv4: 10.0.20.11
+  Slot: 2
+  SSID: Home
+  Security: WPA2-PSK
+  TxRate: 6M
+  RxRate: 234M
+  RSSI: 70
+  RSSI dBm: -65
+  Time: 23:19:03 2026/11/15
+  VapIdx: 1
+  Capability: 802.11ac
+  DOT11 features: 11k
+  Display SSID: Home
+  Band: 5GHz
+  MLO: No
+index: 11
+  MAC: 02:00:00:00:00:0c
+  IPv4: 10.0.20.12
+  Slot: 2
+  SSID: Home
+  Security: WPA2-PSK
+  TxRate: 57M
+  RxRate: 39M
+  RSSI: 42
+  RSSI dBm: -79
+  Time: 03:30:13 2026/11/15
+  VapIdx: 1
+  Capability: 802.11ac
+  DOT11 features: N/A
+  Display SSID: Home
+  Band: 5GHz
+  MLO: No
+index: 12
+  MAC: 02:00:00:00:00:0d
+  IPv4: 10.0.20.13
+  Slot: 3
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 1441M
+  RxRate: 2401M
+  RSSI: 100
+  RSSI dBm: -42
+  Time: 17:28:05 2026/11/14
+  VapIdx: 1
+  Capability: 802.11ax
+  DOT11 features: 11k/v
+  Display SSID: Home
+  Band: 6GHz
+  MLO: No
+index: 13
+  MAC: 02:00:00:00:00:0e
+  IPv4: 10.0.20.14
+  Slot: 2
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 720M
+  RxRate: 1201M
+  RSSI: 100
+  RSSI dBm: -43
+  Time: 17:42:57 2026/11/13
+  VapIdx: 1
+  Capability: 802.11ax
+  DOT11 features: 11k/v
+  Display SSID: Home
+  Band: 5GHz
+  MLO: No
+index: 14
+  MAC: 02:00:00:00:00:0f
+  IPv4: 10.0.20.15
+  Slot: 2
+  SSID: Home
+  Security: WPA2-PSK
+  TxRate: 130M
+  RxRate: 173M
+  RSSI: 80
+  RSSI dBm: -60
+  Time: 08:22:31 2026/11/13
+  VapIdx: 1
+  Capability: 802.11ac
+  DOT11 features: N/A
+  Display SSID: Home
+  Band: 5GHz
+  MLO: No
+index: 15
+  MAC: 02:00:00:00:00:10
+  IPv4: 10.0.20.16
+  Slot: 2
+  SSID: Home
+  Security: WPA2-PSK
+  TxRate: 6M
+  RxRate: 175M
+  RSSI: 60
+  RSSI dBm: -70
+  Time: 08:22:25 2026/11/13
+  VapIdx: 1
+  Capability: 802.11ac-MU
+  DOT11 features: 11k/v
+  Display SSID: Home
+  Band: 5GHz
+  MLO: No
+index: 16
+  MAC: 02:00:00:00:00:11
+  IPv4: 10.0.20.17
+  Slot: 2
+  SSID: Home
+  Security: WPA2-PSK
+  TxRate: 15M
+  RxRate: 292M
+  RSSI: 72
+  RSSI dBm: -64
+  Time: 08:22:25 2026/11/13
+  VapIdx: 1
+  Capability: 802.11ac-MU
+  DOT11 features: 11k/v
+  Display SSID: Home
+  Band: 5GHz
+  MLO: No
+index: 17
+  MAC: 02:00:00:00:00:12
+  IPv4: 10.0.20.18
+  Slot: 2
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 130M
+  RxRate: 6M
+  RSSI: 98
+  RSSI dBm: -51
+  Time: 08:22:23 2026/11/13
+  VapIdx: 1
+  Capability: 802.11a/b/g/n
+  DOT11 features: N/A
+  Display SSID: Home
+  Band: 5GHz
+  MLO: No
+index: 18
+  MAC: 02:00:00:00:00:13
+  IPv4: 10.0.20.19
+  Slot: 2
+  SSID: Home
+  Security: WPA2-PSK
+  TxRate: 263M
+  RxRate: 433M
+  RSSI: 88
+  RSSI dBm: -56
+  Time: 11:51:02 2026/11/12
+  VapIdx: 1
+  Capability: 802.11ac-MU
+  DOT11 features: 11k/v
+  Display SSID: Home
+  Band: 5GHz
+  MLO: No
+index: 19
+  MAC: 02:00:00:00:00:14
+  IPv4: 10.0.20.20
+  Slot: 2
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 39M
+  RxRate: 6M
+  RSSI: 96
+  RSSI dBm: -52
+  Time: 11:50:44 2026/11/12
+  VapIdx: 1
+  Capability: 802.11a/b/g/n
+  DOT11 features: 11k/v
+  Display SSID: Home
+  Band: 5GHz
+  MLO: No
+index: 20
+  MAC: 02:00:00:00:00:15
+  IPv4: 10.0.20.21
+  Slot: 2
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 32M
+  RxRate: 97M
+  RSSI: 44
+  RSSI dBm: -78
+  Time: 03:01:59 2026/11/08
+  VapIdx: 1
+  Capability: 802.11ac
+  DOT11 features: 11k/v
+  Display SSID: Home
+  Band: 5GHz
+  MLO: No
+index: 21
+  MAC: 02:00:00:00:00:16
+  IPv4: 10.0.20.22
+  Slot: 1
+  SSID: Home
+  Security: WPA3-Personal
+  TxRate: 
+  RxRate: 
+  RSSI: 82
+  RSSI dBm: -59
+  Time: 10:11:18 2026/11/06
+  VapIdx: 1
+  Capability:
+  DOT11 features: N/A
+  Display SSID: Home
+  Band: 2.4GHz
+  MLO: No

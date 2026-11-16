@@ -1,0 +1,3 @@
+Slot1: 9
+Slot2: 12
+Slot3: 2

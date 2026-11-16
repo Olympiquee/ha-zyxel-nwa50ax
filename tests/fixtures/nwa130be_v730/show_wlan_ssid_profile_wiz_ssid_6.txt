@@ -1,0 +1,56 @@
+ssid profile: Wiz_SSID_6
+  reference: 0
+  Id: 7
+  Description: 
+  Block_Intra_BSS: no
+  Hide_ssid: no
+  SSID: Unconfigured
+  QoS_mode: wmm
+  Downlink_rate_limit: no
+  Uplink_rate_limit: no
+  Forward_mode: localbridge
+  SSID_VLAN_id: 1
+  Security_profile: Wiz_SEC_Profile_6
+  Captive_profile: 
+  Whitelist_profile: 
+  MACFilter_profile: 
+  Band_Select_mode: disable
+  Band_Select_balance_ratio: 0
+  Band_Select_stop_threshold: 0
+  L2Isolation_profile: 
+  UAPSD: no
+  WalledGarden_profile: 
+  GuestSSID_profile: 
+  SSID_schedule_mode: no
+  SSID_schedule_days_sun: enable
+  SSID_schedule_days_sun_start_1: 00:00
+  SSID_schedule_days_sun_stop_1: 24:00
+  SSID_schedule_days_mon: enable
+  SSID_schedule_days_mon_start_1: 00:00
+  SSID_schedule_days_mon_stop_1: 24:00
+  SSID_schedule_days_tue: enable
+  SSID_schedule_days_tue_start_1: 00:00
+  SSID_schedule_days_tue_stop_1: 24:00
+  SSID_schedule_days_wed: enable
+  SSID_schedule_days_wed_start_1: 00:00
+  SSID_schedule_days_wed_stop_1: 24:00
+  SSID_schedule_days_thu: enable
+  SSID_schedule_days_thu_start_1: 00:00
+  SSID_schedule_days_thu_stop_1: 24:00
+  SSID_schedule_days_fri: enable
+  SSID_schedule_days_fri_start_1: 00:00
+  SSID_schedule_days_fri_stop_1: 24:00
+  SSID_schedule_days_sat: enable
+  SSID_schedule_days_sat_start_1: 00:00
+  SSID_schedule_days_sat_stop_1: 24:00
+  AP_Proxy_ARP: no
+  Dot11k_v: no
+  mlo: yes
+  mld_id: -1
+  owe_mld_id: -1
+  Guest_ssid: no
+  Controller_offline_policy: disable
+  Band_2g: yes
+  Band_5g: yes
+  Band_6g: yes
+  Radius_attr_wispr_bw: no
