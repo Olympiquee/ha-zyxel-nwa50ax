@@ -175,6 +175,7 @@ class ZyxelWriteConfigButton(CoordinatorEntity, ButtonEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
+            "single_press": self._config_baseline.single_press,
             "confirm_window_seconds": WRITE_CONFIRM_WINDOW_SECONDS,
             "confirm_until": self._config_baseline.confirm_until,
             "reference_captured_at": self._config_baseline.reference_captured_at,
