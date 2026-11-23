@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.6.0 - 2026-11-17
+
+### Added
+- **Optional "single press" mode** for the Save config button (options -> *Save config button*, **unchecked by default**: with the default, behaviour is strictly unchanged - two presses, preview then save). Checked, one press saves immediately and the notification then lists what was made permanent. Meant to be used with the confirmation dialog of a dashboard button (YAML example in the README), since Home Assistant offers no pop-up window to integrations.
+- `single_press` attribute on the button.
+
+### Notes
+- In single press mode the comparison is still done just before writing, but a failure to read the configuration never blocks the save (the confirmation was already given); if the write itself fails, no "made permanent" list is shown.
+- Options menu now has 7 sections.
+
+## 2.5.1 - 2026-11-17
+
+### Fixed
+- **Invert switches screen showed only Guest** when opened while the integration was (re)loading or before the first read of the AP. It now merges every available source (SSID list, schedule data, broadcast names, saved choices) and, when no SSID is known yet, says so explicitly (*"has not read the AP's SSIDs yet"*) instead of silently showing a partial list.
+- **Save config button:** a failure while creating the notification can no longer prevent the button from arming or saving. The text of the notification (no secret in it) is also written to the log at INFO level, so it can be read even if the bell is missed.
+
+### Notes
+- The confirmation is a persistent notification (bell icon in the sidebar), not a pop-up window: Home Assistant offers none to integrations.
+
 ## 2.5.0 - 2026-11-16
 
 ### Added
