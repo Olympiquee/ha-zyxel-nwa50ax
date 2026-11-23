@@ -47,6 +47,7 @@
           "data_groups": "Répartition des données (rapide/lent/quotidien)",
           "display": "Affichage (noms des switches)",
           "invert": "Inverser des switches",
+          "write": "Bouton Save config",
           "mikrotik": "Résolveur de noms MikroTik",
           "security": "Sécurité (empreintes SSH)"
         }
@@ -89,6 +90,13 @@
           "inverted_ssids": "Switches inversés"
         }
       },
+      "write": {
+        "title": "Bouton Save config",
+        "description": "Choisis comment le bouton Save config (write) demande confirmation. Décoché (défaut) : deux appuis - le premier affiche dans une notification ce qui deviendrait permanent, le second sous 60 s enregistre. Coché : un seul appui enregistre immédiatement, et la notification indique ensuite ce qui a été rendu permanent. À cocher uniquement si tu mets une fenêtre de confirmation sur le bouton de ton dashboard (voir le README) : une fois coché, N'IMPORTE QUEL appui - automatisation, assistant vocal, autre dashboard - enregistre tout de suite.",
+        "data": {
+          "write_single_press": "Un seul appui (enregistrer immédiatement)"
+        }
+      },
       "mikrotik": {
         "title": "Résolveur de noms MikroTik",
         "description": "Optionnel. Résout les noms d'appareils depuis les baux DHCP du MikroTik - totalement découplé de la connexion à l'AP Zyxel (sa propre connexion, son propre cycle, son propre cache).",
@@ -108,6 +116,9 @@
           "reset_mikrotik_ssh_fingerprint": "Réinitialiser l'empreinte SSH MikroTik mémorisée"
         }
       }
+    },
+    "abort": {
+      "not_ready": "L'intégration n'a pas encore lu les SSID de l'AP (chargement en cours, ou AP injoignable). Patiente une minute, puis rouvre cet écran."
     }
   }
 }
