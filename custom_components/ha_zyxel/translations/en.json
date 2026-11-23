@@ -47,6 +47,7 @@
           "data_groups": "Data assignment (fast/slow/daily)",
           "display": "Display (switch names)",
           "invert": "Invert switches",
+          "write": "Save config button",
           "mikrotik": "MikroTik hostname resolver",
           "security": "Security (SSH fingerprints)"
         }
@@ -89,6 +90,13 @@
           "inverted_ssids": "Reversed switches"
         }
       },
+      "write": {
+        "title": "Save config button",
+        "description": "Choose how the Save config (write) button asks for confirmation. Unchecked (default): two presses - the first press shows in a notification what would be made permanent, the second press within 60 s saves. Checked: a single press saves immediately, and the notification then lists what was made permanent. Only check it if you put a confirmation dialog on your dashboard button (see the README): once checked, ANY press - automation, voice assistant, another dashboard - saves right away.",
+        "data": {
+          "write_single_press": "Single press (save immediately)"
+        }
+      },
       "mikrotik": {
         "title": "MikroTik hostname resolver",
         "description": "Optional. Resolves device hostnames from MikroTik DHCP leases - fully decoupled from the Zyxel AP connection (its own connection, its own cycle, its own cache).",
@@ -108,6 +116,9 @@
           "reset_mikrotik_ssh_fingerprint": "Reset remembered MikroTik SSH fingerprint"
         }
       }
+    },
+    "abort": {
+      "not_ready": "The integration has not read the AP's SSIDs yet (it is still loading, or the AP is unreachable). Wait a minute, then open this screen again."
     }
   }
 }
