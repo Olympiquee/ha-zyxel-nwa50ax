@@ -295,6 +295,27 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "baseline_ko": (
             "La référence n'a pas pu être mise à jour : la prochaine comparaison sera moins précise."
         ),
+        "saved_changes": "Rendus permanents par cet enregistrement :",
+        "saved_none": (
+            "Aucun changement n'était en attente : la configuration en cours était identique "
+            "à la dernière configuration enregistrée que je connais."
+        ),
+        "saved_no_baseline": (
+            "Je n'avais pas de configuration de référence : je ne peux pas lister ce qui a "
+            "été enregistré."
+        ),
+        "saved_unreadable": (
+            "Je n'ai pas pu lire la configuration en cours avant l'enregistrement : je ne "
+            "peux pas lister ce qui a été enregistré."
+        ),
+        "saved_stale": (
+            "La configuration enregistrée dans l'AP avait changé depuis ma référence : la "
+            "liste ci-dessous peut inclure des changements déjà enregistrés auparavant."
+        ),
+        "saved_radios_off": (
+            "Radio désactivée au moment de l'enregistrement : {radios}. Elle restera "
+            "désactivée après un redémarrage de l'AP."
+        ),
         "block_added": "Ajouté : {header}",
         "block_removed": "Supprimé : {header}",
         "radio": "Radio {band} ({slot}) : {state}",
@@ -357,6 +378,26 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "baseline_ok": "The reference configuration has been updated.",
         "baseline_ko": (
             "The reference could not be updated: the next comparison will be less precise."
+        ),
+        "saved_changes": "Made permanent by this save:",
+        "saved_none": (
+            "No change was pending: the running configuration was identical to the last "
+            "saved configuration I know of."
+        ),
+        "saved_no_baseline": (
+            "I had no reference configuration, so I cannot list what was saved."
+        ),
+        "saved_unreadable": (
+            "I could not read the running configuration before saving, so I cannot list "
+            "what was saved."
+        ),
+        "saved_stale": (
+            "The configuration saved in the AP had changed since my reference: the list "
+            "below may include changes that were already saved earlier."
+        ),
+        "saved_radios_off": (
+            "Radio disabled at the time of the save: {radios}. It will stay disabled after "
+            "an AP restart."
         ),
         "block_added": "Added: {header}",
         "block_removed": "Removed: {header}",
@@ -484,3 +525,46 @@ def render_result(result: Mapping[str, Any], baseline_ok: bool, lang: Optional[s
     parts = [t["result_ok"].format(seconds=seconds)]
     parts.append(t["baseline_ok"] if baseline_ok else t["baseline_ko"])
     return t["title_result"], "\n\n".join(parts)
+
+
+def render_single_press_result(
+    report: PendingReport,
+    radios_off: list[str],
+    result: Mapping[str, Any],
+    baseline_ok: bool,
+    lang: Optional[str],
+) -> tuple[str, str]:
+    """(titre, message) du mode « 1 seul appui » : ce qui vient d'être enregistré + le résultat.
+
+    Dans ce mode la confirmation a eu lieu AVANT (fenêtre du dashboard) : la
+    comparaison faite juste avant l'écriture sert à dire, après coup, ce qui a
+    été rendu permanent. Si l'écriture a échoué, rien n'a été enregistré : on
+    ne présente donc aucune liste "rendus permanents".
+    """
+    t = _messages(lang)
+    title, outcome = render_result(result, baseline_ok, lang)
+    if not result.get("success"):
+        return title, outcome
+
+    parts: list[str] = []
+    if report.status == "unreadable":
+        parts.append(t["saved_unreadable"])
+    elif report.status == "no_baseline":
+        parts.append(t["saved_no_baseline"])
+    elif report.status == "none":
+        parts.append(t["saved_none"])
+    else:  # changes | stale
+        if report.status == "stale":
+            parts.append(t["saved_stale"])
+        if report.changes:
+            if report.status == "changes":
+                parts.append(t["saved_changes"])
+            parts.append("\n".join(f"- {line}" for line in describe_changes(report.changes, lang)))
+        elif report.status == "stale":
+            parts.append(t["stale_no_diff"])
+
+    if radios_off and report.status in ("unreadable", "no_baseline", "stale"):
+        parts.append(t["saved_radios_off"].format(radios=", ".join(radios_off)))
+
+    parts.append(outcome)
+    return title, "\n\n".join(parts)
