@@ -1,5 +1,6 @@
 """Config flow for Zyxel integration."""
 import logging
+from typing import Optional
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -27,6 +28,7 @@ from .const import (
     CONF_UPDATE_INTERVAL,
     CONF_USE_REAL_SSID_NAMES,
     CONF_USERNAME,
+    CONF_WRITE_SINGLE_PRESS,
     DATA_ITEM_SSID_SCHEDULES,
     DATA_ITEMS,
     DEFAULT_DAILY_INTERVAL,
@@ -37,6 +39,7 @@ from .const import (
     DEFAULT_SLOW_INTERVAL,
     DEFAULT_USE_REAL_SSID_NAMES,
     DEFAULT_USERNAME,
+    DEFAULT_WRITE_SINGLE_PRESS,
     DOMAIN,
     MAX_DAILY_INTERVAL,
     MAX_FAST_INTERVAL,
@@ -46,7 +49,7 @@ from .const import (
     MIN_SLOW_INTERVAL,
 )
 from .ssh_security import SSHHostKeyChangedError
-from .ssid_names import inverted_profiles
+from .ssid_names import invert_choices, inverted_profiles
 from .zyxel_ssh_api import ZyxelAuthError, ZyxelSSHAPI
 
 _LOGGER = logging.getLogger(__name__)
@@ -203,7 +206,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class OptionsFlow(config_entries.OptionsFlow):
-    """Options Zyxel : menu à 6 sections.
+    """Options Zyxel : menu à 7 sections.
 
     Pas de __init__ personnalisé : `self.config_entry` est désormais fourni
     automatiquement par le framework HA (versions récentes de Home Assistant
@@ -227,7 +230,7 @@ class OptionsFlow(config_entries.OptionsFlow):
         """Menu principal des options."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["intervals", "data_groups", "display", "invert", "mikrotik", "security"],
+            menu_options=["intervals", "data_groups", "display", "invert", "write", "mikrotik", "security"],
         )
 
     async def async_step_intervals(self, user_input=None):
@@ -293,31 +296,43 @@ class OptionsFlow(config_entries.OptionsFlow):
             }),
         )
 
-    async def _ssid_choices(self, current: list[str]) -> list[dict]:
+    async def _ssid_choices(self, current: list[str]) -> Optional[list[dict]]:
         """Profils SSID proposés pour l'inversion, avec le vrai SSID dans le libellé.
 
-        Source : le cache de l'API (aucune commande SSH si déjà peuplé) et les
-        noms lus lors du dernier cycle lent. Les profils déjà enregistrés dans
-        les options restent proposés même si l'AP est momentanément injoignable,
-        pour qu'ils ne disparaissent pas silencieusement de la sélection.
+        Retourne None si AUCUN SSID n'est connu pour le moment : l'intégration est
+        encore en train de (re)charger - le premier cycle de lecture de l'AP prend
+        environ une minute, et enregistrer des options déclenche un rechargement - ou
+        l'AP est injoignable. Mieux vaut le dire que d'afficher une liste partielle
+        (typiquement "Guest" seul, repris des options enregistrées) sans prévenir.
+
+        Sources réunies : liste de l'API (cache, sans commande SSH s'il est peuplé),
+        planning et noms lus par le cycle lent.
         """
-        profiles = set(current)
-        names: dict[str, str] = {}
+        listed: list[str] = []
+        schedules: dict = {}
+        names: dict = {}
         entry_data = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
         if entry_data:
             try:
-                profiles.update(await entry_data["api"].async_get_ssid_list())
+                listed = await entry_data["api"].async_get_ssid_list()
             except Exception as err:  # pylint: disable=broad-except
-                _LOGGER.debug("Liste des SSID indisponible pour l'écran d'inversion: %s", err)
+                _LOGGER.warning("Liste des SSID indisponible pour l'écran d'inversion: %s", err)
             coordinator = entry_data.get("coordinator_for_item", {}).get(DATA_ITEM_SSID_SCHEDULES)
-            names = (getattr(coordinator, "data", None) or {}).get("ssid_names", {})
+            data = getattr(coordinator, "data", None) or {}
+            schedules = data.get("ssid_schedules") or {}
+            names = data.get("ssid_names") or {}
 
-        options = []
-        for profile in sorted(profiles):
-            real = names.get(profile)
-            label = f"{real} ({profile})" if real and real != profile else profile
-            options.append({"value": profile, "label": label})
-        return options
+        if not (set(listed) | set(schedules) | set(names)):
+            _LOGGER.warning(
+                "Écran d'inversion : aucun SSID connu (intégration chargée: %s) - "
+                "réessaie quand le premier cycle de lecture de l'AP est terminé",
+                bool(entry_data),
+            )
+            return None
+
+        choices = invert_choices(current, listed, schedules, names)
+        _LOGGER.debug("Écran d'inversion : %d SSID proposés", len(choices))
+        return choices
 
     async def async_step_invert(self, user_input=None):
         """Sens de chaque switch SSID : normal (ON = planning actif) ou inversé.
@@ -332,6 +347,8 @@ class OptionsFlow(config_entries.OptionsFlow):
 
         current = sorted(inverted_profiles(self.config_entry.options.get(CONF_INVERTED_SSIDS)))
         choices = await self._ssid_choices(current)
+        if choices is None:
+            return self.async_abort(reason="not_ready")
         return self.async_show_form(
             step_id="invert",
             data_schema=vol.Schema({
@@ -344,6 +361,23 @@ class OptionsFlow(config_entries.OptionsFlow):
                         mode=selector.SelectSelectorMode.LIST,
                     )
                 ),
+            }),
+        )
+
+    async def async_step_write(self, user_input=None):
+        """Bouton « Save config (write) » : 2 appuis (défaut) ou 1 seul appui.
+
+        Décoché (défaut) : le 1er appui affiche ce qui deviendrait permanent, le 2e
+        (sous 60 s) enregistre. Coché : 1 seul appui enregistre immédiatement.
+        """
+        if user_input is not None:
+            return self._save(user_input)
+
+        default = self.config_entry.options.get(CONF_WRITE_SINGLE_PRESS, DEFAULT_WRITE_SINGLE_PRESS)
+        return self.async_show_form(
+            step_id="write",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_WRITE_SINGLE_PRESS, default=default): bool,
             }),
         )
 
