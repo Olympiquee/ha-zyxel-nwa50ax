@@ -34,6 +34,7 @@ from .config_snapshot import (
     radio_label,
     render_confirmation,
     render_result,
+    render_single_press_result,
 )
 from .const import DOMAIN, PRIORITY_BASELINE, PRIORITY_MANUAL, WRITE_CONFIRM_WINDOW_SECONDS
 
@@ -45,8 +46,11 @@ STORAGE_VERSION = 1
 class ConfigBaseline:
     """Référence de configuration + machine à états du bouton Write (double appui)."""
 
-    def __init__(self, hass: HomeAssistant, entry_id: str, api: Any) -> None:
+    def __init__(
+        self, hass: HomeAssistant, entry_id: str, api: Any, single_press: bool = False
+    ) -> None:
         self._hass = hass
+        self._single_press = single_press
         self._entry_id = entry_id
         self._api = api
         self._store: Store = Store(hass, STORAGE_VERSION, self.storage_key(entry_id))
@@ -79,6 +83,11 @@ class ConfigBaseline:
             self._capture_task.cancel()
 
     # -- état exposé au bouton -------------------------------------------
+
+    @property
+    def single_press(self) -> bool:
+        """True : un seul appui écrit immédiatement (option, désactivée par défaut)."""
+        return self._single_press
 
     @property
     def armed(self) -> bool:
@@ -136,14 +145,20 @@ class ConfigBaseline:
     async def async_press(self, radio_state: Optional[Mapping[str, Any]] = None) -> str:
         """Un appui sur le bouton Write. Retourne "armed" | "written" | "failed" | "busy".
 
-        1er appui : compare la config actuelle à la référence et NOTIFIE ce que
-                    le `write` rendrait permanent (rien n'est écrit).
-        2e appui dans la fenêtre de confirmation : écrit réellement.
+        Mode par défaut (2 appuis) :
+          1er appui : compare la config actuelle à la référence et NOTIFIE ce que
+                      le `write` rendrait permanent (rien n'est écrit).
+          2e appui dans la fenêtre de confirmation : écrit réellement.
+        Mode « 1 seul appui » (option) : écrit tout de suite, puis NOTIFIE ce qui
+          vient d'être rendu permanent. La confirmation est alors à faire AVANT,
+          par la fenêtre de confirmation du dashboard.
         """
         if self._busy.locked():
             _LOGGER.info("Appui ignoré : une opération sur la configuration est déjà en cours")
             return "busy"
         async with self._busy:
+            if self._single_press:
+                return await self._press_single(radio_state)
             if self.armed:
                 self._armed_until = 0.0
                 self._confirm_until = None
@@ -177,7 +192,8 @@ class ConfigBaseline:
         _LOGGER.info("Write armé (%s) - confirmation attendue sous %ds", report.status, WRITE_CONFIRM_WINDOW_SECONDS)
         return "armed"
 
-    async def _write(self) -> str:
+    async def _do_write(self) -> tuple[dict[str, Any], bool]:
+        """Écrit, attend l'AP, reprend la référence. Retourne (résultat, référence_mise_à_jour)."""
         result = await self._api.async_write_config()
         baseline_ok = False
         if result["success"] and result["responsive"]:
@@ -188,11 +204,47 @@ class ConfigBaseline:
             "baseline_updated": baseline_ok,
             "at": dt_util.utcnow().isoformat(),
         }
+        return result, baseline_ok
+
+    async def _write(self) -> str:
+        """2e appui du mode par défaut."""
+        result, baseline_ok = await self._do_write()
         title, message = render_result(result, baseline_ok, self._hass.config.language)
         self._notify(title, message)
         return "written" if result["success"] else "failed"
 
-    def _notify(self, title: str, message: str) -> None:
-        persistent_notification.async_create(
-            self._hass, message, title=title, notification_id=self._notification_id
+    async def _press_single(self, radio_state: Optional[Mapping[str, Any]]) -> str:
+        """Mode « 1 seul appui » : compare, écrit, puis dit ce qui vient d'être enregistré.
+
+        La lecture préalable ne bloque jamais l'écriture : la confirmation a déjà
+        été donnée (fenêtre du dashboard), même si la config est illisible.
+        """
+        state = await self._api.async_read_config_state(PRIORITY_MANUAL)
+        report = build_report(
+            self._baseline,
+            state["lines"] if state else None,
+            state["startup"] if state else None,
         )
+        _LOGGER.info("Write (1 seul appui) : écriture immédiate (comparaison préalable: %s)", report.status)
+        result, baseline_ok = await self._do_write()
+        title, message = render_single_press_result(
+            report, self._radios_off(radio_state), result, baseline_ok, self._hass.config.language
+        )
+        self._notify(title, message)
+        return "written" if result["success"] else "failed"
+
+    def _notify(self, title: str, message: str) -> None:
+        """Notification persistante (cloche de Home Assistant, PAS une fenêtre surgissante).
+
+        Le contenu est aussi journalisé : il ne contient aucun secret (valeurs
+        déjà masquées), et reste lisible même si la notification est manquée
+        ou si sa création échoue. Un échec de notification ne doit jamais
+        empêcher d'armer le bouton ni d'écrire.
+        """
+        _LOGGER.info("%s | %s", title, " ".join(message.split()))
+        try:
+            persistent_notification.async_create(
+                self._hass, message, title=title, notification_id=self._notification_id
+            )
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.warning("Notification impossible (%s) - voir le contenu journalisé ci-dessus", err)
