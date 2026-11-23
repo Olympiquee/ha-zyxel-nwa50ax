@@ -45,6 +45,13 @@ CONF_USE_REAL_SSID_NAMES = "use_real_ssid_names"
 # au lieu de ON = planning actif). Clé absente = défaut ("Guest" inversé).
 CONF_INVERTED_SSIDS = "inverted_ssids"
 
+# Configuration - Bouton "Save config (write)"
+# False (défaut) : 2 appuis (le 1er affiche ce qui deviendrait permanent, le 2e, sous 60 s,
+# enregistre). True : 1 seul appui = enregistrement immédiat, à réserver à l'usage avec une
+# fenêtre de confirmation sur le dashboard.
+CONF_WRITE_SINGLE_PRESS = "write_single_press"
+DEFAULT_WRITE_SINGLE_PRESS = False
+
 # Defaults - Connexion
 DEFAULT_HOST = "192.168.1.2"
 DEFAULT_USERNAME = "admin"
