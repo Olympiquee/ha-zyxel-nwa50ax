@@ -73,6 +73,28 @@ def semantic_note(inverted: bool) -> str:
     return "ON = Schedule actif (auto on/off), OFF = Always-on (24/7)"
 
 
+def invert_choices(
+    current: Iterable[str],
+    listed: Iterable[str],
+    schedules: Iterable[str],
+    names: Mapping[str, str],
+) -> list[dict[str, str]]:
+    """Options de l'écran « Inverser des switches » : TOUS les profils connus.
+
+    On réunit toutes les sources (liste de l'API, planning lu par le cycle lent,
+    noms diffusés, choix déjà enregistrés) : l'écran ne dépend ainsi d'aucune
+    source unique qui pourrait être vide à un instant donné. Le libellé montre
+    le vrai SSID : "MyHome (Home)".
+    """
+    profiles = set(current) | set(listed) | set(schedules) | set(names)
+    options = []
+    for profile in sorted(profiles, key=lambda p: (p.lower(), p)):
+        real = names.get(profile)
+        label = f"{real} ({profile})" if real and real != profile else profile
+        options.append({"value": profile, "label": label})
+    return options
+
+
 # ----------------------------------------------------------------------------
 # Noms
 # ----------------------------------------------------------------------------
