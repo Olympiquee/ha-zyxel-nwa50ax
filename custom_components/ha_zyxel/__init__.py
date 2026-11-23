@@ -26,6 +26,7 @@ from .const import (
     CONF_SLOW_INTERVAL,
     CONF_SSH_FINGERPRINT,
     CONF_USERNAME,
+    CONF_WRITE_SINGLE_PRESS,
     DATA_ITEM_CLIENTS,
     DATA_ITEMS,
     DEFAULT_DAILY_INTERVAL,
@@ -33,6 +34,7 @@ from .const import (
     DEFAULT_ITEM_GROUPS,
     DEFAULT_MIKROTIK_REFRESH_INTERVAL,
     DEFAULT_SLOW_INTERVAL,
+    DEFAULT_WRITE_SINGLE_PRESS,
     DOMAIN,
     PRESENCE_GRACE_MIN_SECONDS,
     PRESENCE_GRACE_MULTIPLIER,
@@ -219,7 +221,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
 
     # Configuration de référence du bouton Write (stockée masquée, jamais de secret)
-    config_baseline = ConfigBaseline(hass, entry.entry_id, api)
+    config_baseline = ConfigBaseline(
+        hass,
+        entry.entry_id,
+        api,
+        single_press=entry.options.get(CONF_WRITE_SINGLE_PRESS, DEFAULT_WRITE_SINGLE_PRESS),
+    )
     await config_baseline.async_load()
 
     hass.data.setdefault(DOMAIN, {})
