@@ -1,7 +1,7 @@
 # Zyxel NWA50AX Home Assistant Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)
+![Version](https://img.shields.io/badge/version-2.6.0-blue.svg)
 
 Home Assistant custom integration for a **Zyxel NWA50AX** WiFi access point (standalone mode) over SSH.
 
@@ -75,7 +75,7 @@ The very first successful connection also memorizes the AP's SSH host key finger
 
 ## Configuration (after setup)
 
-Open the integration's **Configure** button to reach a menu with 6 sections:
+Open the integration's **Configure** button to reach a menu with 7 sections:
 
 ### Refresh intervals
 Three independent intervals, one per refresh group:
@@ -108,7 +108,7 @@ Every SSID switch can be **normal** or **reversed**:
 | Normal | the schedule is **active** (the SSID follows its planned hours) | the schedule is disabled (SSID always on) |
 | Reversed | the SSID is **always on** (schedule disabled) | the schedule is active |
 
-- Pick the reversed ones in *Invert switches* (a multi-select listing every SSID, with its real WiFi name). A reversed switch shows `[reversed]` at the end of its name and has a `reversed: true` attribute.
+- Pick the reversed ones in *Invert switches* (a multi-select listing every SSID, with its real WiFi name). If it says the integration has not read the AP's SSIDs yet, the integration is still loading (the first read of the AP takes about a minute, and saving options triggers a reload): wait a moment and open it again. A reversed switch shows `[reversed]` at the end of its name and has a `reversed: true` attribute.
 - **By default only Guest is reversed**: that is its historical behaviour, so nothing changes for existing automations. Select nothing to have no reversed switch at all.
 - Changing this flips what the switch *displays* (and what ON/OFF *does*) but never the AP's actual schedule. Unique IDs are unchanged. Remember to adapt any automation or dashboard that relies on the old meaning.
 
@@ -128,8 +128,10 @@ Radio and SSID-schedule changes made through this integration are **temporary**:
 
 Because `write` saves *everything* currently running (a radio you switched off for the night included) and can freeze the AP for a while, the button asks for confirmation:
 
-1. **First press** - a persistent notification lists what saving would make permanent (e.g. "Radio 2.4 GHz (slot1): disabled", "SSID Home schedule: disabled"). Nothing is written.
+1. **First press** - a persistent notification (the **bell icon** in Home Assistant's sidebar: integrations cannot open a pop-up window) lists what saving would make permanent (e.g. "Radio 2.4 GHz (slot1): disabled", "SSID Home schedule: disabled"). Nothing is written.
 2. **Second press within 60 s** - the configuration is saved. The integration waits until the AP answers again, logs how long that took, and posts the result.
+
+The same text is written to the Home Assistant log (`custom_components.ha_zyxel`, INFO level), so you can read it even if you miss the notification. Reading the AP's configuration takes a few seconds, so the notification appears a moment after the press.
 
 The Guest switch also runs `write` (its historical behaviour), so it saves any pending temporary change as well.
 
@@ -141,7 +143,32 @@ The Guest switch also runs `write` (its historical behaviour), so it saves any p
 - **Incomplete read**: a truncated `show running-config` is never compared (it would give false differences); the button then says it could not read the configuration.
 - The reference is kept in Home Assistant's storage and removed with the integration entry. It is never taken "cold" at startup, since the AP may already carry temporary changes.
 
-Button attributes: `confirm_until`, `confirm_window_seconds`, `reference_captured_at`, `last_write` (including `seconds`: the time before the AP answered again after the `write`). Notifications follow Home Assistant's language (French or English).
+### Confirmation mode: two presses (default) or a single press
+
+In the options (*Save config button*), the **Single press** checkbox is **unchecked by default**: nothing changes, the button works exactly as described above (two presses).
+
+Checked, **one press saves immediately**, and the notification then tells you what was made permanent ("Made permanent by this save: ..."). The comparison is still done right before writing, it just can no longer stop you. Home Assistant gives integrations no way to open a pop-up window, so use the confirmation dialog of your **dashboard** instead - a real window, shown at the click:
+
+```yaml
+type: button
+entity: button.zyxel_nwa50ax_save_config_write   # adapt to your entity id
+name: Save AP config
+tap_action:
+  action: perform-action
+  perform_action: button.press
+  target:
+    entity_id: button.zyxel_nwa50ax_save_config_write
+  confirmation:
+    text: >-
+      Save the AP configuration? Temporary changes (disabled radio,
+      disabled schedule) will become permanent.
+```
+
+> **With the option checked, ANY press saves right away** - an automation, a voice assistant, another dashboard without a confirmation dialog. Only enable it if every way of pressing the button goes through a confirmation.
+
+The dashboard dialog shows a fixed text (it cannot list the pending changes); the list comes in the notification afterwards. If you want to see the list *before* saving, keep the default two-press mode.
+
+Button attributes: `single_press`, `confirm_until`, `confirm_window_seconds`, `reference_captured_at`, `last_write` (including `seconds`: the time before the AP answered again after the `write`). Notifications follow Home Assistant's language (French or English).
 
 ## Reconfigure / Re-authenticate
 
