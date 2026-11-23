@@ -398,3 +398,98 @@ def test_result_messages():
     assert "refusé" in render_result({"success": False, "reason": "rejected"}, False, "fr")[1]
     assert "session SSH" in render_result({"success": False, "reason": "session"}, False, "fr")[1]
     assert "rejected" in render_result({"success": False, "reason": "rejected"}, False, "en")[1]
+
+
+# ---------------------------------------------------------------------------
+# Mode « 1 seul appui » : message APRÈS l'écriture
+# ---------------------------------------------------------------------------
+
+from ha_zyxel.config_snapshot import render_single_press_result  # noqa: E402
+
+OK_RESULT = {"success": True, "responsive": True, "seconds": 21.5, "reason": None}
+
+
+def test_single_press_lists_what_was_made_permanent(lines):
+    current = remove_line(remove_line(lines, "wlan-ssid-profile Home", "ssid-schedule"), "wlan slot1", "activate")
+    report = build_report(baseline_of(lines), current, STARTUP)
+    title, message = render_single_press_result(report, [], OK_RESULT, True, "fr")
+    assert title == "Zyxel : enregistrement de la configuration"
+    assert "Rendus permanents par cet enregistrement :" in message
+    assert "- Radio 2,4 GHz (slot1) : désactivée" in message
+    assert "- Planning du SSID Home : désactivé (SSID toujours actif)" in message
+    assert "21.5 s" in message and "La configuration de référence a été mise à jour." in message
+    # Pas de demande de confirmation : elle a eu lieu avant (fenêtre du dashboard).
+    assert "Appuie de nouveau" not in message and "geler" not in message
+
+
+def test_single_press_when_nothing_was_pending(lines):
+    report = build_report(baseline_of(lines), lines, STARTUP)
+    _, message = render_single_press_result(report, [], OK_RESULT, True, "fr")
+    assert "Aucun changement n'était en attente" in message and "Rendus permanents" not in message
+
+
+def test_single_press_without_reference_cannot_list_but_flags_disabled_radios(lines):
+    report = build_report(None, lines, STARTUP)
+    _, message = render_single_press_result(report, ["2,4 GHz (slot1)"], OK_RESULT, True, "fr")
+    assert "pas de configuration de référence" in message
+    assert "Radio désactivée au moment de l'enregistrement : 2,4 GHz (slot1)" in message
+
+
+def test_single_press_when_current_config_was_unreadable():
+    _, message = render_single_press_result(PendingReport("unreadable"), ["5 GHz (slot2)"], OK_RESULT, False, "fr")
+    assert "pas pu lire la configuration en cours avant l'enregistrement" in message
+    assert "5 GHz (slot2)" in message and "moins précise" in message
+
+
+def test_single_press_stale_reference_is_flagged_and_not_presented_as_permanent_list(lines):
+    current = remove_line(lines, "wlan-ssid-profile Home", "ssid-schedule")
+    report = build_report(baseline_of(lines), current, {"size": 1, "mtime": "2030-01-01 00:00:00"})
+    _, message = render_single_press_result(report, [], OK_RESULT, True, "fr")
+    assert "avait changé depuis ma référence" in message
+    assert "- Planning du SSID Home" in message
+    assert "Rendus permanents" not in message
+
+
+def test_single_press_radio_hint_is_not_repeated_when_the_diff_covers_it(lines):
+    current = remove_line(lines, "wlan slot1", "activate")
+    report = build_report(baseline_of(lines), current, STARTUP)
+    _, message = render_single_press_result(report, ["2,4 GHz (slot1)"], OK_RESULT, True, "fr")
+    assert "Radio désactivée au moment" not in message
+
+
+@pytest.mark.parametrize("reason, expected", [("rejected", "refusé"), ("session", "session SSH")])
+def test_single_press_failure_never_claims_anything_was_saved(lines, reason, expected):
+    # Même s'il y avait des changements en attente : le write a échoué, RIEN n'a été enregistré.
+    current = remove_line(lines, "wlan-ssid-profile Home", "ssid-schedule")
+    report = build_report(baseline_of(lines), current, STARTUP)
+    failed = {"success": False, "responsive": False, "seconds": None, "reason": reason}
+    title, message = render_single_press_result(report, ["2,4 GHz (slot1)"], failed, False, "fr")
+    assert expected in message
+    assert "Rendus permanents" not in message and "- Planning" not in message and "Radio désactivée" not in message
+    assert (title, message) == render_result(failed, False, "fr")
+
+
+def test_single_press_write_sent_but_ap_slow_still_lists_what_was_sent(lines):
+    current = remove_line(lines, "wlan-ssid-profile Home", "ssid-schedule")
+    report = build_report(baseline_of(lines), current, STARTUP)
+    slow = {"success": True, "responsive": False, "seconds": 120.0, "reason": None}
+    _, message = render_single_press_result(report, [], slow, False, "fr")
+    assert "- Planning du SSID Home" in message and "ne répond pas encore" in message
+
+
+def test_single_press_message_never_leaks_a_secret():
+    old = load("show_running_config.txt")
+    new = old.replace("FAKEGUESTPSK001=", "FAKEGUESTPSK777=")
+    report = build_report(baseline_of(normalize(old)), normalize(new), STARTUP)
+    for lang in ("fr", "en"):
+        _, message = render_single_press_result(report, [], OK_RESULT, True, lang)
+        assert "FAKE" not in message and "<sha:" in message
+
+
+def test_single_press_message_in_english(lines):
+    current = remove_line(lines, "wlan-ssid-profile Home", "ssid-schedule")
+    report = build_report(baseline_of(lines), current, STARTUP)
+    title, message = render_single_press_result(report, [], OK_RESULT, True, "en")
+    assert title == "Zyxel: saving the configuration"
+    assert "Made permanent by this save:" in message
+    assert "- SSID Home schedule: disabled (SSID always on)" in message
