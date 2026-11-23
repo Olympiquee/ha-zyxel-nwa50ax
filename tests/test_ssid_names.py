@@ -135,3 +135,44 @@ def test_inverted_profiles_explicit_empty_list_means_none_inverted():
 def test_inverted_profiles_explicit_choice_is_kept_as_is():
     assert inverted_profiles(["Home", "IoT"]) == frozenset({"Home", "IoT"})
     assert "Guest" not in inverted_profiles(["Home"])
+
+
+# --- choix de l'écran d'inversion ---------------------------------------------
+
+from ha_zyxel.ssid_names import invert_choices  # noqa: E402
+
+
+def test_invert_choices_lists_every_known_profile_with_its_real_ssid():
+    choices = invert_choices(
+        current=["Guest"],
+        listed=["Guest", "Home", "IoT", "Studio"],
+        schedules=["Guest", "Home", "IoT", "Studio"],
+        names={"Home": "MyHome", "Guest": "MyHome_guest", "IoT": "MyHome_IoT", "Studio": "MyHome_Studio"},
+    )
+    assert [c["value"] for c in choices] == ["Guest", "Home", "IoT", "Studio"]
+    assert [c["label"] for c in choices] == [
+        "MyHome_guest (Guest)", "MyHome (Home)", "MyHome_IoT (IoT)", "MyHome_Studio (Studio)",
+    ]
+
+
+def test_invert_choices_does_not_depend_on_a_single_source():
+    # Même si la liste de l'API est vide (cache pas encore rempli), les profils
+    # lus par le cycle lent suffisent : on ne montre jamais "Guest seul" à tort.
+    only_schedules = invert_choices(["Guest"], [], ["Guest", "Home"], {})
+    assert [c["value"] for c in only_schedules] == ["Guest", "Home"]
+    only_names = invert_choices(["Guest"], [], [], {"Home": "MyHome"})
+    assert [c["value"] for c in only_names] == ["Guest", "Home"]
+
+
+def test_invert_choices_keeps_already_saved_profiles_and_deduplicates():
+    choices = invert_choices(["Home", "Old"], ["Home", "IoT"], ["Home"], {})
+    assert [c["value"] for c in choices] == ["Home", "IoT", "Old"]
+    assert [c["label"] for c in choices] == ["Home", "IoT", "Old"]      # pas de nom réel connu -> nom du profil
+
+
+def test_invert_choices_label_has_no_redundant_parentheses():
+    assert invert_choices([], ["Guest"], [], {"Guest": "Guest"})[0]["label"] == "Guest"
+
+
+def test_invert_choices_sorts_case_insensitively():
+    assert [c["value"] for c in invert_choices([], ["iot", "Home", "guest"], [], {})] == ["guest", "Home", "iot"]
